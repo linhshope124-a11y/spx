@@ -2,7 +2,7 @@
 <html lang="vi">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#f8fafc">
@@ -510,21 +510,6 @@
         </div>
       </button>
 
-      <button class="menu-item" onclick="closeMenuModal();openHistoryTab()">
-        <span class="menu-icon">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M3 3h7v7H3z"/>
-            <path d="M14 3h7v7h-7z"/>
-            <path d="M14 14h7v7h-7z"/>
-            <path d="M3 14h7v7H3z"/>
-          </svg>
-        </span>
-        <div class="menu-text">
-          <div class="menu-title">Nhật ký</div>
-          <div class="menu-sub">Xem, sửa, xoá bản ghi đã lưu</div>
-        </div>
-      </button>
-
       <div class="menu-section-label">Khác</div>
       <a class="menu-item" href="./guide.html" style="text-decoration:none">
         <span class="menu-icon">
@@ -622,7 +607,10 @@
           <span class="ocr-hide-btn" onclick="document.getElementById('ocrPreviewBox').style.display='none'">Ẩn</span>
         </div>
         <img class="ocr-preview-img" id="ocrPreviewImg" alt="Ảnh đã quét" onclick="openOcrLightbox()">
-        <pre id="ocrDebugText" style="background:#0d1117;color:#3fb950;font-family:'JetBrains Mono',monospace;font-size:10px;line-height:1.5;padding:10px;margin-top:10px;border-radius:6px;max-height:250px;overflow:auto;white-space:pre-wrap;word-break:break-all;border:1px solid #30363d"></pre>
+        <div style="text-align:right;margin-top:8px">
+          <button type="button" id="ocrDebugToggle" onclick="toggleOcrDebugText()" style="background:transparent;border:1px solid var(--border);color:var(--text-3);font-size:10px;padding:4px 10px;border-radius:6px;cursor:pointer;font-family:inherit;font-weight:600">Xem log</button>
+        </div>
+        <pre id="ocrDebugText" style="display:none;background:#0d1117;color:#3fb950;font-family:'JetBrains Mono',monospace;font-size:10px;line-height:1.5;padding:10px;margin-top:10px;border-radius:6px;max-height:250px;overflow:auto;white-space:pre-wrap;word-break:break-all;border:1px solid #30363d"></pre>
       </div>
     </div>
     <div class="modal-box-foot">
@@ -839,7 +827,7 @@
   <button class="update-banner-btn" onclick="applyUpdate()">Cập nhật</button>
 </div>
 
-<!-- ============ DIALOG MODAL (thay alert/confirm) ============ -->
+<!-- ============ DIALOG MODAL ============ -->
 <div class="modal-shade dialog-shade" id="dialogModal">
   <div class="dialog-box">
     <div class="dialog-icon-wrap">
