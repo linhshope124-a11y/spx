@@ -34,6 +34,7 @@ import {
   initCloudUI, clearCloudToken
 } from './cloud.js';
 import { undoLast } from './undo.js';
+import { showAlert, showConfirm } from './dialog.js';
 import { WEIGHT_KEYS } from './config.js';
 
 // ================ AUTO-CLEAR INPUT ================
@@ -81,10 +82,10 @@ function _findDuplicates() {
   return dups;
 }
 
-function _cleanupDuplicates() {
+async function _cleanupDuplicates() {
   const dups = _findDuplicates();
   if (dups.length === 0) {
-    alert('Không có bản ghi trùng lặp!');
+    await showAlert('Không có bản ghi trùng lặp!', { title: 'Không tìm thấy', okText: 'Đã hiểu' });
     return;
   }
   const summary = { Giao: 0, Lấy: 0, Hoàn: 0 };
@@ -97,7 +98,15 @@ function _cleanupDuplicates() {
     if (summary[k] > 0) msg += `• ${k}: ${summary[k]}\n`;
   });
   msg += '\nXóa hết các bản ghi trùng (giữ lại 1 bản gốc)?';
-  if (!confirm(msg)) return;
+
+  const ok = await showConfirm(msg, {
+    title: 'Dọn bản ghi trùng',
+    okText: 'Xóa trùng',
+    cancelText: 'Hủy',
+    danger: true
+  });
+  if (!ok) return;
+
   const idsByType = { delivery: [], pickup: [], return: [] };
   dups.forEach(d => idsByType[d.type].push(d.id));
   Object.keys(idsByType).forEach(type => {
@@ -105,7 +114,7 @@ function _cleanupDuplicates() {
     state.appData[type] = state.appData[type].filter(r => !ids.includes(r.id));
   });
   updateAllViews();
-  alert(`Đã xóa ${dups.length} bản ghi trùng lặp!`);
+  await showAlert(`Đã xóa ${dups.length} bản ghi trùng lặp!`, { title: 'Hoàn tất', okText: 'OK' });
 }
 
 // ================ HERO COLLAPSIBLE ================
@@ -127,6 +136,20 @@ function _initHeroExpandState() {
     wrap.classList.add('expanded');
     if (text) text.innerText = 'Ẩn';
   }
+}
+
+// ================ INFO ICON: HƯỚNG DẪN TÍNH THU NHẬP ================
+function _showIncomeInfo() {
+  showAlert(
+    'Lương 1 công = (LCB + Bưu cục + Tài xế) / số ngày tối đa\n\n' +
+    'Đã tích lũy = Lương 1 công × số công\n\n' +
+    'Quy đổi: Giao + Lấy/6 + Hoàn\n' +
+    '• Miền: ≥60 = 1 công, ≥30 = 0.5 công\n' +
+    '• TP.HCM & HN: ≥80 = 1 công, ≥40 = 0.5 công\n\n' +
+    '⚡ Lương được lưu RIÊNG theo từng tháng.\n' +
+    'Chuyển tháng để cấu hình tháng đó.',
+    { title: 'Cách tính thu nhập', okText: 'Đã hiểu' }
+  );
 }
 
 // ================ AUTO-UPDATE ================
@@ -251,6 +274,9 @@ Object.assign(window, {
   jumpToDate,
   goToLatest,
 
+  // Info icon
+  showIncomeInfo: _showIncomeInfo,
+
   // REGION — inline onclick
   changeRegion: function(regionKey, el) {
     try {
@@ -272,10 +298,10 @@ Object.assign(window, {
       const label = regionKey === 'hcm_hn'
         ? 'TP.HCM & Hà Nội (80/40)'
         : 'Miền Bắc/Trung/Nam (60/30)';
-      alert(`Đã chọn khu vực: ${label}`);
+      showAlert(`Đã chọn khu vực: ${label}`, { title: 'Khu vực', okText: 'OK' });
     } catch (e) {
       console.error('[Region] error:', e);
-      alert('Lỗi đổi khu vực: ' + e.message);
+      showAlert('Lỗi đổi khu vực: ' + e.message, { title: 'Lỗi', okText: 'Đóng' });
     }
   },
 
@@ -291,10 +317,7 @@ Object.assign(window, {
   saveRecord, deleteRecord, clearAllHistory,
   copyDataJson, openPasteJsonModal, closePasteJsonModal,
   confirmImportJsonString, exportData, importData, restoreFromVault,
-
-  // Cloud — v50.8.5: thêm clearCloudToken
   testCloudConnection, pushToCloud, pullFromCloud, initCloudUI, clearCloudToken,
-
   undoLast,
 
   saveManualPoints: _saveManualPoints,
@@ -314,12 +337,13 @@ Object.assign(window, {
     updateAllViews();
 
     const [y, m] = state.currentMonth.split('-');
-    alert(
+    showAlert(
       `Đã lưu cấu hình cho Tháng ${parseInt(m, 10)}/${y}!\n\n` +
       `• Lương:   ${salary.toLocaleString('vi-VN')}\n` +
       `• Bưu cục: ${buuCuc.toLocaleString('vi-VN')}\n` +
       `• Tài xế:  ${taiXe.toLocaleString('vi-VN')}\n` +
-      `• Khu vực: ${state.region === 'hcm_hn' ? 'TP.HCM & HN' : 'Miền'}`
+      `• Khu vực: ${state.region === 'hcm_hn' ? 'TP.HCM & HN' : 'Miền'}`,
+      { title: 'Đã lưu cấu hình', okText: 'OK' }
     );
   },
 
@@ -335,7 +359,7 @@ Object.assign(window, {
   initTheme();
   initRankUI();
   initRegionUI();
-  initPeriodLabelLongPress();   // v50.8.5: gắn long-press label Tháng
+  initPeriodLabelLongPress();
 
   updatePeriodBarUI();
   _initHeroExpandState();
@@ -344,7 +368,6 @@ Object.assign(window, {
   updateAllViews();
   setTimeout(() => preloadTesseractWorker(), 2000);
 
-  // Auto-update system
   registerSW();
   setTimeout(checkVersion, 2000);
   setInterval(checkVersion, 5 * 60 * 1000);
