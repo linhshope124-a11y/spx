@@ -13,7 +13,8 @@ import {
   openHistoryTab,
   openSettingsModal, closeSettingsModal,
   openCoffeeModal, closeCoffeeModal, copyBankNumber,
-  toggleThemeFromMenu
+  toggleThemeFromMenu,
+  initPeriodLabelLongPress
 } from './ui.js';
 import {
   handleOcrImage, preloadTesseractWorker,
@@ -28,7 +29,10 @@ import {
   confirmImportJsonString, exportData, importData, restoreFromVault
 } from './backup.js';
 import { updateAllViews } from './render.js';
-import { testCloudConnection, pushToCloud, pullFromCloud, initCloudUI } from './cloud.js';
+import {
+  testCloudConnection, pushToCloud, pullFromCloud,
+  initCloudUI, clearCloudToken
+} from './cloud.js';
 import { undoLast } from './undo.js';
 import { WEIGHT_KEYS } from './config.js';
 
@@ -40,7 +44,7 @@ function attachAutoClearInputs() {
   });
 }
 
-// ================ v50.4: SAVE CONFIG THEO THÁNG ================
+// ================ SAVE CONFIG THEO THÁNG ================
 let manualPointsTimer = null;
 function _saveManualPoints() {
   const buuCuc = parseInt(document.getElementById('manualBuuCucInput').value, 10) || 0;
@@ -104,7 +108,7 @@ function _cleanupDuplicates() {
   alert(`Đã xóa ${dups.length} bản ghi trùng lặp!`);
 }
 
-// ================ v48: HERO COLLAPSIBLE ================
+// ================ HERO COLLAPSIBLE ================
 function _toggleHeroMetrics() {
   const wrap = document.getElementById('heroMetricsWrap');
   const text = document.getElementById('heroToggleText');
@@ -125,7 +129,7 @@ function _initHeroExpandState() {
   }
 }
 
-// ================ v50.7.2: AUTO-UPDATE ================
+// ================ AUTO-UPDATE ================
 let swRegistration = null;
 let currentAppVersion = null;
 let waitingWorker = null;
@@ -232,13 +236,13 @@ Object.assign(window, {
   toggleThemeFromMenu,
   switchMainTab, switchModalSubTab, setOverviewFilter, setHistFilter,
   setRankTier,
-  syncRankUIForCurrentMonth,   // v50.8.0
+  syncRankUIForCurrentMonth,
 
-  // v50.7.2: Auto-update
+  // Auto-update
   applyUpdate,
   checkVersion,
 
-  // ===== v46: PERIOD BAR =====
+  // PERIOD BAR
   setPeriodMode,
   periodPrev,
   periodNext,
@@ -247,7 +251,7 @@ Object.assign(window, {
   jumpToDate,
   goToLatest,
 
-  // ===== REGION — inline onclick =====
+  // REGION — inline onclick
   changeRegion: function(regionKey, el) {
     try {
       console.log('[Region] change →', regionKey);
@@ -287,13 +291,16 @@ Object.assign(window, {
   saveRecord, deleteRecord, clearAllHistory,
   copyDataJson, openPasteJsonModal, closePasteJsonModal,
   confirmImportJsonString, exportData, importData, restoreFromVault,
-  testCloudConnection, pushToCloud, pullFromCloud, initCloudUI,
+
+  // Cloud — v50.8.5: thêm clearCloudToken
+  testCloudConnection, pushToCloud, pullFromCloud, initCloudUI, clearCloudToken,
+
   undoLast,
 
   saveManualPoints: _saveManualPoints,
   saveSalaryConfig: _saveSalaryConfig,
 
-  // v50.4: force save config vào tháng hiện tại
+  // force save config vào tháng hiện tại
   forceSaveConfig: function() {
     const buuCuc = parseInt(document.getElementById('manualBuuCucInput').value, 10) || 0;
     const taiXe  = parseInt(document.getElementById('manualTaiXeInput').value, 10) || 0;
@@ -319,7 +326,6 @@ Object.assign(window, {
   findDuplicates: _findDuplicates,
   cleanupDuplicates: _cleanupDuplicates,
 
-  // v48: Hero toggle
   toggleHeroMetrics: _toggleHeroMetrics
 });
 
@@ -329,6 +335,7 @@ Object.assign(window, {
   initTheme();
   initRankUI();
   initRegionUI();
+  initPeriodLabelLongPress();   // v50.8.5: gắn long-press label Tháng
 
   updatePeriodBarUI();
   _initHeroExpandState();
@@ -337,7 +344,7 @@ Object.assign(window, {
   updateAllViews();
   setTimeout(() => preloadTesseractWorker(), 2000);
 
-  // v50.7.2: Auto-update system
+  // Auto-update system
   registerSW();
   setTimeout(checkVersion, 2000);
   setInterval(checkVersion, 5 * 60 * 1000);
