@@ -12,7 +12,6 @@ function formatDateLabel(isoDate) {
   return `${wd}, ${d}/${m}/${y}`;
 }
 
-// v50.1: label "Tháng 10/2026"
 function formatMonthLabelShort(isoMonth) {
   if (!isoMonth || !/^\d{4}-\d{2}$/.test(isoMonth)) return '';
   const [y, m] = isoMonth.split('-');
@@ -84,9 +83,9 @@ export function setHistFilter(filter, btn) {
   renderHistory();
 }
 
-// ================ v46: PERIOD BAR ================
+// ================ PERIOD BAR ================
 export function setPeriodMode(mode, el) {
-  // v50: chỉ chấp nhận 'month' — toggle Ngày đã bỏ
+  // Chỉ chấp nhận 'month' — toggle Ngày đã bỏ từ v50
   if (mode !== 'month') return;
   if (state.periodMode === mode) return;
 
@@ -104,7 +103,7 @@ export function periodPrev() {
   state.currentMonth = `${newY}-${String(newM).padStart(2, '0')}`;
   persistPeriodState();
   updatePeriodBarUI();
-  syncRankUIForCurrentMonth();   // v50.8.0: cập nhật pill hạng theo tháng mới
+  syncRankUIForCurrentMonth();
   updateAllViews();
 }
 
@@ -117,11 +116,16 @@ export function periodNext() {
   state.currentMonth = `${newY}-${String(newM).padStart(2, '0')}`;
   persistPeriodState();
   updatePeriodBarUI();
-  syncRankUIForCurrentMonth();   // v50.8.0
+  syncRankUIForCurrentMonth();
   updateAllViews();
 }
 
 export function openPeriodPicker() {
+  // v50.8.5: bỏ qua nếu vừa long-press label thành công
+  if (window.__periodLongPressFired) {
+    window.__periodLongPressFired = false;
+    return;
+  }
   const p = document.getElementById('monthPickerInput');
   if (!p) return;
   p.value = state.currentMonth;
@@ -136,12 +140,11 @@ export function jumpToMonth(value) {
   state.currentMonth = value > nowMonth ? nowMonth : value;
   persistPeriodState();
   updatePeriodBarUI();
-  syncRankUIForCurrentMonth();   // v50.8.0
+  syncRankUIForCurrentMonth();
   updateAllViews();
 }
 
 export function jumpToDate(value) {
-  // v50: giữ hàm để tương thích, không dùng nữa
   if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return;
   const today = getTodayIso();
   state.currentDate = value > today ? today : value;
@@ -167,11 +170,10 @@ export function goToLatest() {
     targetDate = `${y.getFullYear()}-${String(y.getMonth() + 1).padStart(2, '0')}-${String(y.getDate()).padStart(2, '0')}`;
   }
 
-  // v50: luôn nhảy theo tháng
   state.currentMonth = targetDate.slice(0, 7);
   persistPeriodState();
   updatePeriodBarUI();
-  syncRankUIForCurrentMonth();   // v50.8.0
+  syncRankUIForCurrentMonth();
   updateAllViews();
 }
 
@@ -181,7 +183,6 @@ export function updatePeriodBarUI() {
   const nextBtn = document.getElementById('periodNext');
   if (!label) return;
 
-  // v50: luôn mode month
   label.innerText = formatMonthLabelShort(state.currentMonth || getCurrentMonthIso());
 
   if (prevBtn) {
@@ -198,14 +199,55 @@ export function updatePeriodBarUI() {
   }
 }
 
-// ================ v50.8.0: RANK (theo tháng) ================
+// ================ v50.8.5: LONG-PRESS LABEL → NHẢY MỚI NHẤT ================
+let _periodLongPressAttached = false;
+function attachPeriodLabelLongPress() {
+  if (_periodLongPressAttached) return;
+  _periodLongPressAttached = true;
+
+  const label = document.getElementById('periodLabel');
+  if (!label) return;
+
+  let timer = null;
+
+  const start = () => {
+    window.__periodLongPressFired = false;
+    label.classList.add('long-pressing');
+    timer = setTimeout(() => {
+      window.__periodLongPressFired = true;
+      if (navigator.vibrate) { try { navigator.vibrate(30); } catch {} }
+      goToLatest();
+      label.classList.remove('long-pressing');
+      // Reset cờ sau 350ms để click tiếp theo hoạt động bình thường
+      setTimeout(() => { window.__periodLongPressFired = false; }, 350);
+    }, 550);
+  };
+
+  const cancel = () => {
+    if (timer) { clearTimeout(timer); timer = null; }
+    label.classList.remove('long-pressing');
+  };
+
+  label.addEventListener('touchstart',  start,  { passive: true });
+  label.addEventListener('touchend',    cancel);
+  label.addEventListener('touchcancel', cancel);
+  label.addEventListener('touchmove',   cancel, { passive: true });
+  label.addEventListener('mousedown',   start);
+  label.addEventListener('mouseup',     cancel);
+  label.addEventListener('mouseleave',  cancel);
+}
+
+export function initPeriodLabelLongPress() {
+  attachPeriodLabelLongPress();
+}
+
+// ================ RANK ================
 export function setRankTier(rankKey, bonusPct, el) {
   if (window.__spxLongPressFired) {
     window.__spxLongPressFired = false;
     return;
   }
 
-  // Lưu vào tháng hiện tại
   setRankConfig(state.currentMonth, { name: rankKey, bonus: bonusPct });
 
   el.parentElement.querySelectorAll('.rank-pill').forEach(p => p.classList.remove('active'));
@@ -216,7 +258,6 @@ export function setRankTier(rankKey, bonusPct, el) {
 }
 
 function resetRankToNone() {
-  // Xóa hạng của tháng hiện tại
   setRankConfig(state.currentMonth, { name: 'none', bonus: 0 });
 
   document.querySelectorAll('.rank-pill').forEach(p => {
@@ -264,7 +305,6 @@ function attachRankLongPress() {
   });
 }
 
-// v50.8.0: đồng bộ pill hạng theo tháng đang xem
 export function syncRankUIForCurrentMonth() {
   const cfg = getRankConfig(state.currentMonth);
   document.querySelectorAll('.rank-pill').forEach(p => {
@@ -447,7 +487,6 @@ export function showToast(message, type = 'success', duration = 2200) {
 
 // ================ HELPERS ================
 function clearAllConfidenceHighlightsLocal() {
-  // v50.6: xóa banner cảnh báo phân bố
   const banner = document.getElementById('distWarningBanner');
   if (banner) banner.remove();
 
