@@ -7,6 +7,7 @@ import {
 import { STORAGE_KEYS, APP_VERSION } from './config.js';
 import { applyImportedPayload, askImportMode } from './backup.js';
 import { updateAllViews } from './render.js';
+import { showAlert, showConfirm } from './dialog.js';
 
 const GH_API = 'https://api.github.com';
 const GIST_FILENAME = 'spx-tracker-backup.json';
@@ -40,7 +41,6 @@ function buildPayload() {
 // ==================== TEST CONNECTION ====================
 export async function testCloudConnection() {
   const input = document.getElementById('ghTokenInput');
-  // v50.8.2: cho phép dùng token đã lưu nếu input trống
   const token = (input?.value || '').trim() || getToken();
 
   if (!token) { setStatus('❌ Chưa nhập token', 'err'); return; }
@@ -52,7 +52,6 @@ export async function testCloudConnection() {
     if (!res.ok) throw new Error('Token sai hoặc hết hạn');
     const user = await res.json();
     localStorage.setItem('spx_gh_token', token);
-    // v50.8.2: xóa input sau khi lưu thành công
     if (input) input.value = '';
     updateTokenUI();
     setStatus(`✅ OK — ${user.login}`, 'ok');
@@ -68,7 +67,6 @@ export async function pushToCloud() {
 
   if (!token) { setStatus('❌ Chưa có token', 'err'); return; }
 
-  // Nếu user vừa nhập token mới → lưu lại + xóa input
   if (input?.value?.trim()) {
     localStorage.setItem('spx_gh_token', input.value.trim());
     input.value = '';
@@ -134,9 +132,13 @@ export async function pullFromCloud() {
   const gistId = (document.getElementById('gistIdInput')?.value.trim()) || getGistId();
 
   if (!token || !gistId) { setStatus('❌ Chưa cấu hình token/gist', 'err'); return; }
-  if (!confirm('Khôi phục từ Cloud sẽ ÁP DỤNG dữ liệu từ Cloud. Tiếp tục?')) return;
 
-  // Nếu user vừa nhập token mới → lưu
+  const ok = await showConfirm(
+    'Khôi phục từ Cloud sẽ áp dụng dữ liệu từ Gist.\n\nTiếp tục?',
+    { title: 'Khôi phục từ Cloud', okText: 'Khôi phục', cancelText: 'Hủy' }
+  );
+  if (!ok) return;
+
   if (input?.value?.trim()) {
     localStorage.setItem('spx_gh_token', input.value.trim());
     input.value = '';
@@ -174,22 +176,18 @@ export async function pullFromCloud() {
     updateAllViews();
 
     const doneMsg = mode === 'overwrite'
-      ? `✅ Đã GHI ĐÈ từ Cloud: ${result.addedCount} bản ghi`
-      : `✅ Đã THÊM VÀO từ Cloud: +${result.addedCount} bản ghi` +
-        (result.removedCount > 0 ? `\n🧹 Bỏ qua ${result.removedCount} trùng` : '');
+      ? `Đã GHI ĐÈ từ Cloud: ${result.addedCount} bản ghi`
+      : `Đã THÊM VÀO từ Cloud: +${result.addedCount} bản ghi` +
+        (result.removedCount > 0 ? `\nBỏ qua ${result.removedCount} trùng` : '');
 
     setStatus('✅ Khôi phục thành công!', 'ok');
-    alert(doneMsg);
+    await showAlert(doneMsg, { title: '✅ Hoàn tất', okText: 'OK' });
   } catch (e) {
     setStatus(`❌ Lỗi: ${e.message}`, 'err');
   }
 }
 
-// ==================== v50.8.2: TOKEN MANAGEMENT ====================
-/**
- * Cập nhật UI token — hiển thị trạng thái đã lưu/ chưa lưu.
- * KHÔNG refill token vào input (bảo mật).
- */
+// ==================== TOKEN MANAGEMENT ====================
 function updateTokenUI() {
   const hasToken = Boolean(getToken());
   const wrapper = document.getElementById('tokenStatusWrap');
@@ -201,12 +199,19 @@ function updateTokenUI() {
   if (clearBtn) clearBtn.style.display = hasToken ? 'inline-flex' : 'none';
 }
 
-/**
- * Xóa token đã lưu khỏi localStorage.
- */
-export function clearCloudToken() {
+export async function clearCloudToken() {
   if (!getToken()) return;
-  if (!confirm('Xóa token GitHub đã lưu?\n\nBạn sẽ cần nhập lại token để backup Cloud.')) return;
+
+  const ok = await showConfirm(
+    'Xóa token GitHub đã lưu?\n\nBạn sẽ cần nhập lại token để backup Cloud.',
+    {
+      title: '🗑️ Xóa token',
+      okText: 'Xóa',
+      cancelText: 'Hủy',
+      danger: true
+    }
+  );
+  if (!ok) return;
 
   localStorage.removeItem('spx_gh_token');
   const input = document.getElementById('ghTokenInput');
@@ -225,7 +230,6 @@ export function initCloudUI() {
   const gistInput  = document.getElementById('gistIdInput');
   const toggle     = document.getElementById('autoBackupToggle');
 
-  // v50.8.2: KHÔNG refill token vào input
   if (tokenInput) {
     tokenInput.value = '';
     if (hasToken) {
@@ -245,10 +249,8 @@ export function initCloudUI() {
     };
   }
 
-  // Hiển thị trạng thái token
   updateTokenUI();
 
-  // Status tổng
   if (!hasToken) {
     setStatus('Chưa cấu hình — cần tạo token', 'idle');
   } else if (!gistId) {
