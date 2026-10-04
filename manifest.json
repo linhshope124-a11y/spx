@@ -1,0 +1,20 @@
+{
+  "name": "Theo Dõi Sản Lượng & Điểm SPX",
+  "short_name": "SPX Tracker",
+  "description": "Ứng dụng theo dõi sản lượng giao/lấy/hoàn và tính điểm SPX",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f8fafc",
+  "theme_color": "#ff5722",
+  "lang": "vi",
+  "icons": [
+    {
+      "src": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxOTIgMTkyIj48cmVjdCB3aWR0aD0iMTkyIiBoZWlnaHQ9IjE5MiIgcng9IjM4IiBmaWxsPSIjZmY1NzIyIi8+PHRleHQgeD0iOTYiIHk9IjExNSIgZm9udC1zaXplPSI4OCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1mYW1pbHk9IkFyaWFsIiBmaWxsPSIjZmZmIiBmb250LXdlaWdodD0iYm9sZCI+U1BYPC90ZXh0Pjwvc3ZnPg==",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

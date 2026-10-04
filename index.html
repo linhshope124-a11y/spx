@@ -1,0 +1,843 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#f8fafc">
+<meta name="description" content="Theo dõi sản lượng giao/lấy/hoàn và tính điểm SPX">
+<title>Theo Dõi Sản Lượng & Điểm SPX</title>
+<link rel="manifest" href="./manifest.json">
+<link rel="apple-touch-icon" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxOTIgMTkyIj48cmVjdCB3aWR0aD0iMTkyIiBoZWlnaHQ9IjE5MiIgcng9IjM4IiBmaWxsPSIjZmY1NzIyIi8+PHRleHQgeD0iOTYiIHk9IjExNSIgZm9udC1zaXplPSI4OCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1mYW1pbHk9IkFyaWFsIiBmaWxsPSIjZmZmIiBmb250LXdlaWdodD0iYm9sZCI+U1BYPC90ZXh0Pjwvc3ZnPg==">
+<meta name="apple-mobile-web-app-title" content="SPX Tracker">
+<link rel="stylesheet" href="./css/style.css">
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+</head>
+<body>
+
+<!-- ============ FLOATING HEADER ============ -->
+<div class="header-wrapper">
+  <div class="header-card">
+    <div class="header-row">
+      <button class="header-icon-btn" onclick="openMenuModal()" aria-label="Menu">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+          <line x1="3" y1="6" x2="21" y2="6"/>
+          <line x1="3" y1="12" x2="21" y2="12"/>
+          <line x1="3" y1="18" x2="21" y2="18"/>
+        </svg>
+      </button>
+
+      <div class="period-cluster">
+        <button class="period-arrow-btn" id="periodPrev" onclick="periodPrev()" aria-label="Tháng trước">‹</button>
+        <button class="period-label" id="periodLabel" onclick="openPeriodPicker()">Tháng 10/2026</button>
+        <button class="period-arrow-btn" id="periodNext" onclick="periodNext()" aria-label="Tháng sau">›</button>
+      </div>
+
+      <button class="header-icon-btn" onclick="goToLatest()" aria-label="Mới nhất" title="Mới nhất">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="9"/>
+          <polyline points="12 7 12 12 15 15"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+  <input type="month" id="monthPickerInput" style="display:none" onchange="jumpToMonth(this.value)">
+</div>
+
+<!-- ============ MAIN ============ -->
+<div class="layout-shell">
+  <div class="content-area">
+
+    <!-- ===== TAB TỔNG QUAN ===== -->
+    <div class="tab-panel active" id="tab-overview">
+      <main class="app-container">
+
+        <section class="hero" id="overviewHero">
+          <div class="hero-top">
+            <span class="hero-eyebrow">Điểm tích lũy</span>
+            <span class="hero-context" id="heroContext"></span>
+          </div>
+
+          <div class="hero-data" id="heroData">
+            <div class="hero-row-main">
+              <div class="hero-value" id="overallTotalPoints">0 <span class="hero-value-unit">Điểm</span></div>
+              <button type="button" class="hero-toggle-btn" onclick="toggleHeroMetrics()" aria-label="Chi tiết">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="12" r="9"/>
+                  <line x1="12" y1="8" x2="12" y2="12"/>
+                  <line x1="12" y1="16" x2="12.01" y2="16"/>
+                </svg>
+                <span id="heroToggleText">Chi tiết</span>
+              </button>
+            </div>
+
+            <div class="hero-metrics-wrap" id="heroMetricsWrap">
+              <div class="hero-metrics" id="heroMetrics">
+                <div class="hero-metric">
+                  <div class="hero-metric-value" id="heroBase">0</div>
+                  <div class="hero-metric-label">Gốc</div>
+                </div>
+                <div class="hero-metric">
+                  <div class="hero-metric-value" id="heroBonus">+0</div>
+                  <div class="hero-metric-label">Thưởng</div>
+                </div>
+                <div class="hero-metric">
+                  <div class="hero-metric-value" id="heroIncome">+0</div>
+                  <div class="hero-metric-label">Thu nhập</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="hero-tiles" id="heroTiles">
+              <div class="hero-tile hero-tile-giao">
+                <span class="hero-tile-label">Giao</span>
+                <span class="hero-tile-value" id="heroTileDel">0</span>
+              </div>
+              <div class="hero-tile hero-tile-lay">
+                <span class="hero-tile-label">Lấy</span>
+                <span class="hero-tile-value" id="heroTilePick">0</span>
+              </div>
+              <div class="hero-tile hero-tile-hoan">
+                <span class="hero-tile-label">Hoàn</span>
+                <span class="hero-tile-value" id="heroTileRet">0</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="hero-empty" id="heroEmpty">
+            <div class="hero-empty-title">Bắt đầu theo dõi</div>
+            <div class="hero-empty-sub">Nhập sản lượng để tính điểm tích lũy</div>
+            <div class="hero-empty-cta">
+              <button type="button" class="btn-cta-ocr" onclick="document.getElementById('ocrFileInput').click()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M3 7V5a2 2 0 0 1 2-2h2"/>
+                  <path d="M17 3h2a2 2 0 0 1 2 2v2"/>
+                  <path d="M21 17v2a2 2 0 0 1-2 2h-2"/>
+                  <path d="M7 21H5a2 2 0 0 1-2-2v-2"/>
+                  <circle cx="12" cy="12" r="3"/>
+                </svg>
+                <span>Quét ảnh</span>
+              </button>
+              <button type="button" class="btn-cta-manual" onclick="openAddModal()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M12 20h9"/>
+                  <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
+                </svg>
+                <span>Nhập tay</span>
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <section class="card card-rank">
+          <div class="rank-inline-row">
+            <span class="rank-inline-label">Hạng</span>
+            <div class="rank-pill-group rank-pill-group-inline">
+              <button class="rank-pill" data-rank="dong"      onclick="setRankTier('dong', 0.10, this)">Đồng</button>
+              <button class="rank-pill" data-rank="bac"       onclick="setRankTier('bac', 0.15, this)">Bạc</button>
+              <button class="rank-pill" data-rank="vang"      onclick="setRankTier('vang', 0.20, this)">Vàng</button>
+              <button class="rank-pill" data-rank="bach_kim"  onclick="setRankTier('bach_kim', 0.22, this)">B.Kim</button>
+              <button class="rank-pill" data-rank="kim_cuong" onclick="setRankTier('kim_cuong', 0.26, this)">K.Cương</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="card card-ratio">
+          <div class="card-head-inline card-head-ratio">
+            <span class="card-label">Phân bổ</span>
+          </div>
+
+          <div id="ratioContent">
+            <div class="ratio-bar" id="ratioBar">
+              <div class="ratio-seg ratio-seg-del"  id="ratioBarDel"  style="width:33.3%"></div>
+              <div class="ratio-seg ratio-seg-pick" id="ratioBarPick" style="width:33.3%"></div>
+              <div class="ratio-seg ratio-seg-ret"  id="ratioBarRet"  style="width:33.4%"></div>
+            </div>
+            <div class="ratio-legend ratio-legend-inline">
+              <span class="legend-inline-item"><span class="dot dot-giao"></span><b id="ratioPctDel">0%</b></span>
+              <span class="legend-inline-sep">·</span>
+              <span class="legend-inline-item"><span class="dot dot-lay"></span><b id="ratioPctPick">0%</b></span>
+              <span class="legend-inline-sep">·</span>
+              <span class="legend-inline-item"><span class="dot dot-hoan"></span><b id="ratioPctRet">0%</b></span>
+            </div>
+          </div>
+
+          <div class="ratio-empty" id="ratioEmpty" style="display:none">
+            Chưa có đơn nào trong kỳ này
+          </div>
+        </section>
+
+        <details class="card income-section" id="incomeDetails">
+          <summary class="income-summary">
+            <div class="income-summary-left">
+              <span class="income-summary-title">
+                Thu nhập
+                <button class="info-icon" type="button"
+                        onclick="event.preventDefault(); event.stopPropagation(); alert('Cách tính thu nhập:\n\nLương 1 công = (LCB + Bưu cục + Tài xế) / số ngày tối đa\n\nĐã tích lũy = Lương 1 công × số công\n\nQuy đổi: Giao + Lấy/6 + Hoàn\n• Miền: ≥60 = 1 công, ≥30 = 0.5 công\n• TP.HCM & HN: ≥80 = 1 công, ≥40 = 0.5 công\n\n⚡ Lương được lưu RIÊNG theo từng tháng.\nChuyển tháng để cấu hình tháng đó.')"
+                        aria-label="Trợ giúp">i</button>
+              </span>
+              <div class="income-days-wrap">
+                <span class="income-summary-days" id="incomeDayCount">0/26 công</span>
+                <div class="income-progress">
+                  <div class="income-progress-fill" id="incomeProgressFill"></div>
+                </div>
+              </div>
+            </div>
+            <div class="income-summary-right">
+              <span class="income-summary-value" id="incomeTotalDisplay">+0 Điểm</span>
+              <span class="income-chevron">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="6 9 12 15 18 9"/>
+                </svg>
+              </span>
+            </div>
+          </summary>
+
+          <div class="income-content">
+            <div class="salary-month-hint" id="salaryMonthHint">📅 Áp dụng cho: Tháng 10/2026</div>
+
+            <div class="income-row income-row-region">
+              <span class="income-row-label">Khu vực tính công</span>
+              <div class="region-pill-group">
+                <button type="button" class="region-pill" data-region="mien" onclick="changeRegion('mien', this)">
+                  <span>Miền</span><span>60/30</span>
+                </button>
+                <button type="button" class="region-pill" data-region="hcm_hn" onclick="changeRegion('hcm_hn', this)">
+                  <span>TP.HCM · HN</span><span>80/40</span>
+                </button>
+              </div>
+            </div>
+            <div class="income-row">
+              <span class="income-row-label">LCB</span>
+              <div class="income-row-input">
+                <input type="number" inputmode="numeric" id="salaryBaseInput" value="0" min="0" oninput="saveSalaryConfig()" onchange="saveSalaryConfig()">
+                <span class="income-unit">đ/tháng</span>
+              </div>
+            </div>
+            <div class="income-row">
+              <span class="income-row-label">Bưu cục</span>
+              <div class="income-row-input">
+                <input type="number" inputmode="numeric" id="manualBuuCucInput" value="0" min="0" oninput="saveManualPoints()" onchange="saveManualPoints()">
+                <span class="income-unit">đ/tháng</span>
+              </div>
+            </div>
+            <div class="income-row">
+              <span class="income-row-label">Tài xế</span>
+              <div class="income-row-input">
+                <input type="number" inputmode="numeric" id="manualTaiXeInput" value="0" min="0" oninput="saveManualPoints()" onchange="saveManualPoints()">
+                <span class="income-unit">đ/tháng</span>
+              </div>
+            </div>
+            <div class="income-summary-box">
+              <div class="income-summary-line">
+                <span>Lương 1 công</span>
+                <span id="incomePerDayText">0 Điểm/công</span>
+              </div>
+              <div class="income-summary-line total">
+                <span>Đã tích lũy</span>
+                <b id="incomeTotalDisplayInner">+0 Điểm</b>
+              </div>
+            </div>
+            <button class="btn btn-primary income-save-btn" onclick="forceSaveConfig()">Lưu cấu hình tháng này</button>
+          </div>
+        </details>
+
+        <section class="card" id="opportunityCard">
+          <div class="card-head">
+            <div>
+              <h2 class="card-title">Cơ hội tăng điểm</h2>
+              <p class="card-sub">Số đơn cần thêm để đạt mốc tiếp theo</p>
+            </div>
+          </div>
+          <div class="filter-bar">
+            <button class="filter-btn active" onclick="setOverviewFilter('all', this)">Tất cả</button>
+            <button class="filter-btn" onclick="setOverviewFilter('del', this)">Giao</button>
+            <button class="filter-btn" onclick="setOverviewFilter('pick', this)">Lấy</button>
+            <button class="filter-btn" onclick="setOverviewFilter('ret', this)">Hoàn</button>
+          </div>
+          <div id="overviewMilestoneList"></div>
+        </section>
+
+      </main>
+    </div>
+
+    <!-- ===== TAB GIAO ===== -->
+    <div class="tab-panel" id="tab-delivery">
+      <main class="app-container">
+        <section class="hero hero-sm hero-giao">
+          <div class="hero-top">
+            <span class="hero-eyebrow">Giao</span>
+            <span class="hero-pill" id="delTotalOrders">0 đơn</span>
+          </div>
+          <div class="hero-value" id="delTotalPoints">0 <span class="hero-value-unit">Điểm</span></div>
+        </section>
+        <section class="card card-flush">
+          <div class="card-head-pad">
+            <h2 class="card-title">Phân bổ & mục tiêu</h2>
+          </div>
+          <div class="table-scroll table-clean">
+            <table>
+              <thead>
+                <tr>
+                  <th>KG</th>
+                  <th>SL</th>
+                  <th>Mốc</th>
+                  <th>Điểm</th>
+                  <th class="th-right">Cần</th>
+                  <th class="th-right">Được</th>
+                </tr>
+              </thead>
+              <tbody id="delTableBody"></tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <!-- ===== TAB LẤY ===== -->
+    <div class="tab-panel" id="tab-pickup">
+      <main class="app-container">
+        <section class="hero hero-sm hero-lay">
+          <div class="hero-top">
+            <span class="hero-eyebrow">Lấy</span>
+            <span class="hero-pill" id="pickTotalOrders">0 đơn</span>
+          </div>
+          <div class="hero-value" id="pickTotalPoints">0 <span class="hero-value-unit">Điểm</span></div>
+        </section>
+        <section class="card card-flush">
+          <div class="card-head-pad">
+            <h2 class="card-title">Phân bổ & mục tiêu</h2>
+          </div>
+          <div class="table-scroll table-clean">
+            <table>
+              <thead>
+                <tr>
+                  <th>KG</th>
+                  <th>SL</th>
+                  <th>Mốc</th>
+                  <th>Điểm</th>
+                  <th class="th-right">Cần</th>
+                  <th class="th-right">Được</th>
+                </tr>
+              </thead>
+              <tbody id="pickTableBody"></tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <!-- ===== TAB HOÀN ===== -->
+    <div class="tab-panel" id="tab-return">
+      <main class="app-container">
+        <section class="hero hero-sm hero-hoan">
+          <div class="hero-top">
+            <span class="hero-eyebrow">Hoàn</span>
+            <span class="hero-pill" id="retTotalOrders">0 đơn</span>
+          </div>
+          <div class="hero-value" id="retTotalPoints">0 <span class="hero-value-unit">Điểm</span></div>
+        </section>
+        <section class="card card-flush">
+          <div class="card-head-pad">
+            <h2 class="card-title">Phân bổ & mục tiêu</h2>
+          </div>
+          <div class="table-scroll table-clean">
+            <table>
+              <thead>
+                <tr>
+                  <th>KG</th>
+                  <th>SL</th>
+                  <th>Mốc</th>
+                  <th>Điểm</th>
+                  <th class="th-right">Cần</th>
+                  <th class="th-right">Được</th>
+                </tr>
+              </thead>
+              <tbody id="retTableBody"></tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <!-- ===== TAB NHẬT KÝ ===== -->
+    <div class="tab-panel" id="tab-history">
+      <main class="app-container">
+        <section class="card">
+          <div class="card-head">
+            <div>
+              <h2 class="card-title">Nhật ký</h2>
+              <p class="card-sub" id="histCountNote">0 bản ghi</p>
+            </div>
+          </div>
+          <div class="filter-bar">
+            <button class="filter-btn active" onclick="setHistFilter('all', this)">Tất cả</button>
+            <button class="filter-btn" onclick="setHistFilter('delivery', this)">Giao</button>
+            <button class="filter-btn" onclick="setHistFilter('pickup', this)">Lấy</button>
+            <button class="filter-btn" onclick="setHistFilter('return', this)">Hoàn</button>
+          </div>
+          <div id="historyEntries"></div>
+        </section>
+      </main>
+    </div>
+
+  </div>
+</div>
+<!-- ============ BOTTOM NAV ============ -->
+<aside class="bottom-nav">
+  <button class="nav-btn active" data-tab="overview" onclick="switchMainTab('overview', this)" aria-label="Tổng quan">
+    <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="3" y="3" width="7" height="7" rx="1.5"/>
+      <rect x="14" y="3" width="7" height="7" rx="1.5"/>
+      <rect x="3" y="14" width="7" height="7" rx="1.5"/>
+      <rect x="14" y="14" width="7" height="7" rx="1.5"/>
+    </svg>
+    <span class="nav-label">T.Quan</span>
+  </button>
+
+  <button class="nav-btn" data-tab="delivery" onclick="switchMainTab('delivery', this)" aria-label="Giao">
+    <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M1 3h15v13H1z"/>
+      <path d="M16 8h4l3 3v5h-7V8z"/>
+      <circle cx="5.5" cy="18.5" r="2.5"/>
+      <circle cx="18.5" cy="18.5" r="2.5"/>
+    </svg>
+    <span class="nav-label">Giao</span>
+  </button>
+
+  <button class="nav-btn-fab" onclick="document.getElementById('ocrFileInput').click()" aria-label="Quét ảnh">
+    <span class="fab-icon">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 7V5a2 2 0 0 1 2-2h2"/>
+        <path d="M17 3h2a2 2 0 0 1 2 2v2"/>
+        <path d="M21 17v2a2 2 0 0 1-2 2h-2"/>
+        <path d="M7 21H5a2 2 0 0 1-2-2v-2"/>
+        <circle cx="12" cy="12" r="3"/>
+      </svg>
+    </span>
+  </button>
+
+  <button class="nav-btn" data-tab="pickup" onclick="switchMainTab('pickup', this)" aria-label="Lấy">
+    <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M22 12h-6l-2 3h-4l-2-3H2"/>
+      <path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>
+    </svg>
+    <span class="nav-label">Lấy</span>
+  </button>
+
+  <button class="nav-btn" data-tab="return" onclick="switchMainTab('return', this)" aria-label="Hoàn">
+    <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M16.5 9.4 7.5 4.21"/>
+      <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+      <polyline points="3.27 6.96 12 12.01 20.73 6.96"/>
+      <line x1="12" y1="22.08" x2="12" y2="12"/>
+    </svg>
+    <span class="nav-label">Hoàn</span>
+  </button>
+</aside>
+
+<input type="file" id="ocrFileInput" accept="image/*" multiple style="display:none;" onchange="handleOcrImage(event)">
+
+<!-- ============ MENU MODAL ============ -->
+<div class="modal-shade" id="menuModal" onclick="if(event.target===this)closeMenuModal()">
+  <div class="modal-box menu-modal-box">
+    <div class="modal-box-head">
+      <h3>Menu</h3>
+      <button class="modal-close-btn" onclick="closeMenuModal()" aria-label="Đóng">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <line x1="18" y1="6" x2="6" y2="18"/>
+          <line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+    </div>
+    <div class="modal-body menu-body">
+
+      <div class="menu-section-label">Cài đặt</div>
+      <button class="menu-item" onclick="toggleThemeFromMenu()">
+        <span class="menu-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+          </svg>
+        </span>
+        <div class="menu-text">
+          <div class="menu-title" id="menuThemeTitle">Chế độ tối</div>
+          <div class="menu-sub" id="menuThemeSub">Chuyển sang giao diện tối</div>
+        </div>
+      </button>
+
+      <button class="menu-item" onclick="closeMenuModal();openSettingsModal()">
+        <span class="menu-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="7 10 12 15 17 10"/>
+            <line x1="12" y1="15" x2="12" y2="3"/>
+          </svg>
+        </span>
+        <div class="menu-text">
+          <div class="menu-title">Backup & Cloud</div>
+          <div class="menu-sub">Đồng bộ Gist · JSON · Dọn trùng</div>
+        </div>
+      </button>
+
+      <button class="menu-item" onclick="closeMenuModal();checkVersion()">
+        <span class="menu-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="23 4 23 10 17 10"/>
+            <polyline points="1 20 1 14 7 14"/>
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+          </svg>
+        </span>
+        <div class="menu-text">
+          <div class="menu-title">Kiểm tra cập nhật</div>
+          <div class="menu-sub">Tìm bản mới từ server</div>
+        </div>
+      </button>
+
+      <div class="menu-section-label">Dữ liệu</div>
+      <button class="menu-item" onclick="closeMenuModal();openAddModal()">
+        <span class="menu-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 20h9"/>
+            <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
+          </svg>
+        </span>
+        <div class="menu-text">
+          <div class="menu-title">Nhập sản lượng</div>
+          <div class="menu-sub">Nhập tay theo 8 dải khối lượng</div>
+        </div>
+      </button>
+
+      <button class="menu-item" onclick="closeMenuModal();openHistoryTab()">
+        <span class="menu-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 3h7v7H3z"/>
+            <path d="M14 3h7v7h-7z"/>
+            <path d="M14 14h7v7h-7z"/>
+            <path d="M3 14h7v7H3z"/>
+          </svg>
+        </span>
+        <div class="menu-text">
+          <div class="menu-title">Nhật ký</div>
+          <div class="menu-sub">Xem, sửa, xoá bản ghi đã lưu</div>
+        </div>
+      </button>
+
+      <div class="menu-section-label">Khác</div>
+      <a class="menu-item" href="./guide.html" style="text-decoration:none">
+        <span class="menu-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/>
+            <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>
+          </svg>
+        </span>
+        <div class="menu-text">
+          <div class="menu-title">Hướng dẫn sử dụng</div>
+          <div class="menu-sub">Mở trang hướng dẫn đầy đủ</div>
+        </div>
+      </a>
+
+      <button class="menu-item" onclick="closeMenuModal();openCoffeeModal()">
+        <span class="menu-icon menu-icon-heart">
+          <svg viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 21s-7.5-4.8-10-10c-1.4-3 0-7 4-7 2 0 3.5 1 4 2.5.5-1.5 2-2.5 4-2.5 4 0 5.4 4 4 7-2.5 5.2-10 10-10 10z"/>
+          </svg>
+        </span>
+        <div class="menu-text">
+          <div class="menu-title">Ủng hộ tác giả</div>
+          <div class="menu-sub">Viettinbank · Cảm ơn bạn!</div>
+        </div>
+      </button>
+
+    </div>
+  </div>
+</div>
+
+<!-- ============ ENTRY MODAL ============ -->
+<div class="modal-shade" id="entryModal">
+  <div class="modal-box">
+    <div class="modal-box-head">
+      <button class="modal-back-btn" id="backToBatchBtn" onclick="backToBatch()" style="display:none">← Quay lại</button>
+      <h3 id="modalTitle" style="flex:1;text-align:center;">Nhập sản lượng ngày</h3>
+      <button class="modal-close-btn" onclick="closeModal()" aria-label="Đóng">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <line x1="18" y1="6" x2="6" y2="18"/>
+          <line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="editEntryId" value="">
+      <input type="hidden" id="editEntryType" value="">
+      <div style="margin-bottom:14px;max-width:180px">
+        <label class="form-label">Ngày ghi nhận</label>
+        <input type="date" id="inputDate" class="input-control">
+      </div>
+      <div class="modal-tabs" id="modalSubTabGroup">
+        <button type="button" class="modal-tab-btn active tab-del" id="subtab-btn-del" onclick="switchModalSubTab('del')">Giao</button>
+        <button type="button" class="modal-tab-btn tab-pick" id="subtab-btn-pick" onclick="switchModalSubTab('pick')">Lấy</button>
+        <button type="button" class="modal-tab-btn tab-ret" id="subtab-btn-ret" onclick="switchModalSubTab('ret')">Hoàn</button>
+      </div>
+      <div class="modal-section-card card-del modal-subtab-pane" id="pane-del">
+        <div class="weights-horizontal-grid">
+          <div class="weight-input-item"><label>&gt;0 - 2 kg</label><input type="number" inputmode="numeric" id="del_inp_0_2" class="input-control auto-clear" value="0" min="0"></div>
+          <div class="weight-input-item"><label>&gt;2 - 4 kg</label><input type="number" inputmode="numeric" id="del_inp_2_4" class="input-control auto-clear" value="0" min="0"></div>
+          <div class="weight-input-item"><label>&gt;4 - 6 kg</label><input type="number" inputmode="numeric" id="del_inp_4_6" class="input-control auto-clear" value="0" min="0"></div>
+          <div class="weight-input-item"><label>&gt;6 - 8 kg</label><input type="number" inputmode="numeric" id="del_inp_6_8" class="input-control auto-clear" value="0" min="0"></div>
+          <div class="weight-input-item"><label>&gt;8 - 10 kg</label><input type="number" inputmode="numeric" id="del_inp_8_10" class="input-control auto-clear" value="0" min="0"></div>
+          <div class="weight-input-item"><label>&gt;10 - 12 kg</label><input type="number" inputmode="numeric" id="del_inp_10_12" class="input-control auto-clear" value="0" min="0"></div>
+          <div class="weight-input-item"><label>&gt;12 - 15 kg</label><input type="number" inputmode="numeric" id="del_inp_12_15" class="input-control auto-clear" value="0" min="0"></div>
+          <div class="weight-input-item"><label>&gt;15 kg</label><input type="number" inputmode="numeric" id="del_inp_over_15" class="input-control auto-clear" value="0" min="0"></div>
+        </div>
+      </div>
+      <div class="modal-section-card card-pick modal-subtab-pane" id="pane-pick" style="display:none">
+        <div class="weights-horizontal-grid">
+          <div class="weight-input-item"><label>&gt;0 - 2 kg</label><input type="number" inputmode="numeric" id="pick_inp_0_2" class="input-control auto-clear" value="0" min="0"></div>
+          <div class="weight-input-item"><label>&gt;2 - 4 kg</label><input type="number" inputmode="numeric" id="pick_inp_2_4" class="input-control auto-clear" value="0" min="0"></div>
+          <div class="weight-input-item"><label>&gt;4 - 6 kg</label><input type="number" inputmode="numeric" id="pick_inp_4_6" class="input-control auto-clear" value="0" min="0"></div>
+          <div class="weight-input-item"><label>&gt;6 - 8 kg</label><input type="number" inputmode="numeric" id="pick_inp_6_8" class="input-control auto-clear" value="0" min="0"></div>
+          <div class="weight-input-item"><label>&gt;8 - 10 kg</label><input type="number" inputmode="numeric" id="pick_inp_8_10" class="input-control auto-clear" value="0" min="0"></div>
+          <div class="weight-input-item"><label>&gt;10 - 12 kg</label><input type="number" inputmode="numeric" id="pick_inp_10_12" class="input-control auto-clear" value="0" min="0"></div>
+          <div class="weight-input-item"><label>&gt;12 - 15 kg</label><input type="number" inputmode="numeric" id="pick_inp_12_15" class="input-control auto-clear" value="0" min="0"></div>
+          <div class="weight-input-item"><label>&gt;15 kg</label><input type="number" inputmode="numeric" id="pick_inp_over_15" class="input-control auto-clear" value="0" min="0"></div>
+        </div>
+      </div>
+      <div class="modal-section-card card-ret modal-subtab-pane" id="pane-ret" style="display:none">
+        <div class="weights-horizontal-grid">
+          <div class="weight-input-item"><label>&gt;0 - 2 kg</label><input type="number" inputmode="numeric" id="ret_inp_0_2" class="input-control auto-clear" value="0" min="0"></div>
+          <div class="weight-input-item"><label>&gt;2 - 4 kg</label><input type="number" inputmode="numeric" id="ret_inp_2_4" class="input-control auto-clear" value="0" min="0"></div>
+          <div class="weight-input-item"><label>&gt;4 - 6 kg</label><input type="number" inputmode="numeric" id="ret_inp_4_6" class="input-control auto-clear" value="0" min="0"></div>
+          <div class="weight-input-item"><label>&gt;6 - 8 kg</label><input type="number" inputmode="numeric" id="ret_inp_6_8" class="input-control auto-clear" value="0" min="0"></div>
+          <div class="weight-input-item"><label>&gt;8 - 10 kg</label><input type="number" inputmode="numeric" id="ret_inp_8_10" class="input-control auto-clear" value="0" min="0"></div>
+          <div class="weight-input-item"><label>&gt;10 - 12 kg</label><input type="number" inputmode="numeric" id="ret_inp_10_12" class="input-control auto-clear" value="0" min="0"></div>
+          <div class="weight-input-item"><label>&gt;12 - 15 kg</label><input type="number" inputmode="numeric" id="ret_inp_12_15" class="input-control auto-clear" value="0" min="0"></div>
+          <div class="weight-input-item"><label>&gt;15 kg</label><input type="number" inputmode="numeric" id="ret_inp_over_15" class="input-control auto-clear" value="0" min="0"></div>
+        </div>
+      </div>
+      <div class="ocr-preview-box" id="ocrPreviewBox" style="display:none">
+        <div class="ocr-preview-label">
+          <span>Ảnh gốc — đối chiếu số</span>
+          <span class="ocr-hide-btn" onclick="document.getElementById('ocrPreviewBox').style.display='none'">Ẩn</span>
+        </div>
+        <img class="ocr-preview-img" id="ocrPreviewImg" alt="Ảnh đã quét" onclick="openOcrLightbox()">
+        <pre id="ocrDebugText" style="background:#0d1117;color:#3fb950;font-family:'JetBrains Mono',monospace;font-size:10px;line-height:1.5;padding:10px;margin-top:10px;border-radius:6px;max-height:250px;overflow:auto;white-space:pre-wrap;word-break:break-all;border:1px solid #30363d"></pre>
+      </div>
+    </div>
+    <div class="modal-box-foot">
+      <button class="btn" onclick="closeModal()">Hủy</button>
+      <button class="btn btn-primary" onclick="saveRecord()">Lưu dữ liệu</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ BATCH OCR MODAL ============ -->
+<div class="modal-shade" id="batchOcrModal">
+  <div class="modal-box">
+    <div class="modal-box-head">
+      <h3>Kết quả quét (<span id="batchCount">0</span>)</h3>
+      <button class="modal-close-btn" onclick="closeBatchOcrModal()" aria-label="Đóng">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <line x1="18" y1="6" x2="6" y2="18"/>
+          <line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <div id="batchList"></div>
+    </div>
+    <div class="modal-box-foot" style="justify-content:space-between;flex-wrap:wrap;gap:6px">
+      <button class="btn btn-ocr" onclick="appendBatchFiles()">📷 Quét thêm</button>
+      <div style="display:flex;gap:6px;margin-left:auto">
+        <button class="btn" onclick="closeBatchOcrModal()">Đóng</button>
+        <button class="btn btn-primary" onclick="saveBatchAll()">Lưu tất cả</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ SETTINGS MODAL ============ -->
+<div class="modal-shade" id="settingsModal" onclick="if(event.target===this)closeSettingsModal()">
+  <div class="modal-box">
+    <div class="modal-box-head">
+      <h3>Backup & Quản lý</h3>
+      <button class="modal-close-btn" onclick="closeSettingsModal()" aria-label="Đóng">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <line x1="18" y1="6" x2="6" y2="18"/>
+          <line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+    </div>
+    <div class="modal-body">
+
+      <div class="settings-section-title">☁️ Cloud Backup (GitHub Gist)</div>
+      <p class="settings-hint">Tự động lưu lên Cloud — reset máy không mất dữ liệu.</p>
+
+      <label class="settings-label">GitHub Token</label>
+      <input type="password" id="ghTokenInput" class="input-control" placeholder="ghp_... (dán token mới)" style="font-family:'JetBrains Mono',monospace;font-size:12px">
+
+      <!-- v50.8.2: Token status + nút xóa -->
+      <div class="token-status-wrap" id="tokenStatusWrap" style="display:none">
+        <span class="token-saved-label" id="tokenSavedLabel">✅ Đã lưu token</span>
+        <button type="button" class="token-clear-btn" id="clearTokenBtn" onclick="clearCloudToken()">
+          🗑️ Xóa token
+        </button>
+      </div>
+
+      <label class="settings-label" style="margin-top:12px">Gist ID</label>
+      <input type="text" id="gistIdInput" class="input-control" placeholder="Tự động sau lần backup đầu" style="font-family:'JetBrains Mono',monospace;font-size:12px">
+
+      <label class="settings-checkbox">
+        <input type="checkbox" id="autoBackupToggle" style="width:auto;margin:0">
+        <span>Tự động backup sau mỗi thay đổi</span>
+      </label>
+
+      <div class="settings-row">
+        <button class="btn" onclick="testCloudConnection()" style="flex:1">🔌 Kiểm tra</button>
+        <button class="btn btn-primary" onclick="pushToCloud()" style="flex:1">☁️ Backup</button>
+      </div>
+      <div style="margin-top:8px">
+        <button class="btn" onclick="pullFromCloud()" style="width:100%">⬇️ Khôi phục từ Cloud</button>
+      </div>
+
+      <div class="cloud-status idle" id="cloudStatus">Chưa cấu hình</div>
+
+      <hr class="settings-hr">
+
+      <div class="settings-section-title">📁 Sao lưu cục bộ</div>
+      <p class="settings-hint">Export/Import dữ liệu dạng file JSON.</p>
+
+      <div class="settings-row">
+        <button class="btn" id="copyJsonBtn" onclick="copyDataJson()" style="flex:1">📋 Chép</button>
+        <button class="btn" onclick="openPasteJsonModal()" style="flex:1">📝 Dán</button>
+      </div>
+      <div class="settings-row" style="margin-top:8px">
+        <button class="btn" onclick="exportData()" style="flex:1">💾 Lưu file</button>
+        <button class="btn" onclick="document.getElementById('importFileInput').click()" style="flex:1">📥 Nạp file</button>
+        <input type="file" id="importFileInput" accept=".json" style="display:none;" onchange="importData(event)">
+      </div>
+      <div style="margin-top:8px">
+        <button class="btn" onclick="restoreFromVault()" style="width:100%">🔄 Phục hồi tự động</button>
+      </div>
+
+      <hr class="settings-hr">
+
+      <div class="settings-section-title">🧹 Công cụ</div>
+      <p class="settings-hint">Tìm và xóa các bản ghi trùng lặp (cùng ngày + cùng số liệu).</p>
+      <button class="btn" onclick="cleanupDuplicates()" style="width:100%;background:var(--warning-bg);border-color:var(--warning-bd);color:var(--warning);font-weight:600">
+        Dọn bản ghi trùng lặp
+      </button>
+
+      <hr class="settings-hr">
+
+      <div class="settings-section-title" style="color:var(--danger)">⚠️ Vùng nguy hiểm</div>
+      <p class="settings-hint">Xóa toàn bộ dữ liệu sản lượng đã nhập. <b style="color:var(--danger)">Không thể khôi phục!</b></p>
+      <button class="btn" onclick="clearAllHistory()" style="width:100%;background:var(--danger-bg);border-color:var(--danger-bd);color:var(--danger);font-weight:600">
+        Xóa toàn bộ nhật ký
+      </button>
+
+      <hr class="settings-hr">
+
+      <div class="settings-section-title">📖 Hướng dẫn lấy Token</div>
+      <ol class="settings-guide">
+        <li>Vào <b>github.com/settings/tokens</b></li>
+        <li>Bấm <b>Generate new token (classic)</b></li>
+        <li>Note: <code>spx-backup</code> · Expiration: <code>No expiration</code></li>
+        <li>Scope: tích <b>gist</b> · Bấm <b>Generate</b></li>
+        <li>Copy token → paste vào ô trên</li>
+      </ol>
+    </div>
+    <div class="modal-box-foot">
+      <button class="btn btn-primary" onclick="closeSettingsModal()" style="width:100%">Đóng</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ PASTE JSON MODAL ============ -->
+<div class="modal-shade" id="pasteJsonModal" onclick="if(event.target===this)closePasteJsonModal()">
+  <div class="modal-box coffee-modal-box">
+    <div class="modal-box-head">
+      <h3>Dán chuỗi JSON</h3>
+      <button class="modal-close-btn" onclick="closePasteJsonModal()" aria-label="Đóng">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <line x1="18" y1="6" x2="6" y2="18"/>
+          <line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <p style="font-size:12px;color:var(--text-2);margin-bottom:10px">Dán mã JSON đã sao chép:</p>
+      <textarea id="jsonPasteInput" rows="8" class="input-control" style="font-family:'JetBrains Mono',monospace;font-size:11px;resize:vertical" placeholder='{"delivery":[...], "pickup":[...], "return":[...]}'></textarea>
+    </div>
+    <div class="modal-box-foot">
+      <button class="btn" onclick="closePasteJsonModal()">Hủy</button>
+      <button class="btn btn-primary" onclick="confirmImportJsonString()">Khôi phục</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ DONATE MODAL ============ -->
+<div class="modal-shade" id="coffeeModal" onclick="if(event.target===this)closeCoffeeModal()">
+  <div class="modal-box coffee-modal-box">
+    <div class="modal-box-head">
+      <h3>Ủng hộ tác giả</h3>
+      <button class="modal-close-btn" onclick="closeCoffeeModal()" aria-label="Đóng">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <line x1="18" y1="6" x2="6" y2="18"/>
+          <line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <div class="donate-heart">❤️</div>
+      <p class="donate-text">
+        Nếu app này giúp ích cho công việc của bạn,<br>
+        hãy ủng hộ tác giả một chút nhé!
+      </p>
+
+      <div class="bank-card">
+        <div class="bank-label">VIETTINBANK</div>
+        <div class="bank-stk" id="bankSTK">106879606835</div>
+        <div class="bank-name">Chủ TK: LINH</div>
+        <button class="btn btn-primary" id="copyBankBtn" onclick="copyBankNumber()" style="width:100%;margin-top:16px;font-weight:600;padding:12px">
+          📋 Sao chép số tài khoản
+        </button>
+      </div>
+    </div>
+    <div class="modal-box-foot">
+      <button class="btn" onclick="closeCoffeeModal()" style="width:100%">Đóng</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ UNDO BANNER ============ -->
+<div id="undoBanner" class="undo-banner">
+  <span id="undoMsg" style="flex:1">Đã thực hiện thay đổi</span>
+  <button class="undo-btn" onclick="undoLast()">Hoàn tác</button>
+</div>
+
+<!-- ============ OCR LOADING ============ -->
+<div id="ocrLoadingOverlay">
+  <div class="spinner"></div>
+  <div class="ocr-title" id="ocrStatusTitle">Đang quét ảnh...</div>
+  <div class="ocr-desc" id="ocrStatusDesc">Vui lòng chờ trong giây lát</div>
+</div>
+
+<!-- ============ OCR LIGHTBOX ============ -->
+<div id="ocrLightbox" onclick="closeOcrLightbox()">
+  <button class="close-lb" onclick="closeOcrLightbox()" aria-label="Đóng">✕</button>
+  <img id="ocrLightboxImg" alt="Ảnh phóng to">
+</div>
+
+<!-- ============ TOAST ============ -->
+<div id="appToast" class="app-toast"></div>
+
+<!-- ============ UPDATE BANNER ============ -->
+<div id="updateBanner" class="update-banner">
+  <span class="update-banner-icon">🎉</span>
+  <span id="updateBannerMsg" class="update-banner-msg">Có bản mới!</span>
+  <button class="update-banner-btn" onclick="applyUpdate()">Cập nhật</button>
+</div>
+
+<script type="module" src="./js/main.js"></script>
+</body>
+</html>

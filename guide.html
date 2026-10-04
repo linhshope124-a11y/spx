@@ -1,0 +1,1308 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#f8fafc">
+<title>Hướng dẫn — SPX Tracker</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600;700&display=swap">
+<style>
+:root {
+  --bg: #f8fafc;
+  --surface: #ffffff;
+  --surface-2: #f1f5f9;
+  --border: #e5e7eb;
+  --text-1: #0f172a;
+  --text-2: #475569;
+  --text-3: #94a3b8;
+  --accent: #ff5722;
+  --accent-soft: #fff1eb;
+  --accent-border: #ffd5c2;
+  --success: #059669;
+  --success-bg: #ecfdf5;
+  --warning: #d97706;
+  --warning-bg: #fffbeb;
+  --danger: #dc2626;
+  --danger-bg: #fef2f2;
+}
+[data-theme="dark"] {
+  --bg: #0d1117;
+  --surface: #161b22;
+  --surface-2: #21262d;
+  --border: #30363d;
+  --text-1: #e6edf3;
+  --text-2: #adbac7;
+  --text-3: #768390;
+  --accent: #ff6e40;
+  --accent-soft: rgba(255, 110, 64, 0.12);
+  --accent-border: rgba(255, 110, 64, 0.3);
+  --success: #3fb950;
+  --success-bg: rgba(63, 185, 80, 0.12);
+  --warning: #d29922;
+  --warning-bg: rgba(210, 153, 34, 0.12);
+  --danger: #f85149;
+  --danger-bg: rgba(248, 81, 73, 0.12);
+}
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+html { scroll-behavior: smooth; scroll-padding-top: 80px; }
+body {
+  background: var(--bg);
+  color: var(--text-1);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  padding-bottom: 40px;
+}
+
+/* ===== HEADER STICKY ===== */
+.g-header {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  background: var(--bg);
+  padding: 12px 16px 8px;
+  padding-top: calc(12px + env(safe-area-inset-top, 0px));
+  max-width: 700px;
+  margin: 0 auto;
+  border-bottom: 1px solid var(--border);
+}
+.g-header-inner {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 8px 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  box-shadow: 0 2px 14px rgba(15, 23, 42, 0.06);
+}
+.g-back-btn {
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  cursor: pointer;
+  color: var(--text-1);
+  transition: all 0.15s;
+  text-decoration: none;
+}
+.g-back-btn svg { width: 20px; height: 20px; }
+.g-back-btn:active { transform: scale(0.94); }
+.g-title {
+  flex: 1;
+  font-size: 14.5px;
+  font-weight: 700;
+  color: var(--text-1);
+  letter-spacing: -0.015em;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ===== LAYOUT ===== */
+.g-shell {
+  max-width: 700px;
+  margin: 0 auto;
+  padding: 0 16px;
+}
+
+/* ===== HERO ===== */
+.g-hero {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 20px;
+  margin-top: 14px;
+  position: relative;
+  overflow: hidden;
+  background-image: radial-gradient(140% 100% at 100% 0%, var(--accent-soft) 0%, transparent 55%);
+}
+.g-hero::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, var(--accent) 0%, #ea4512 60%, var(--accent) 100%);
+}
+.g-hero-title {
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  color: var(--text-1);
+  line-height: 1.15;
+  margin-bottom: 6px;
+}
+.g-hero-sub {
+  font-size: 12.5px;
+  color: var(--text-3);
+  font-weight: 500;
+}
+.g-hero-version {
+  display: inline-block;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+  color: var(--accent);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 9px;
+  border-radius: 999px;
+  margin-top: 10px;
+  letter-spacing: 0.3px;
+}
+
+/* ===== MỤC LỤC ===== */
+.g-toc {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 16px;
+  margin-top: 14px;
+}
+.g-toc-title {
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.9px;
+  color: var(--text-3);
+  margin-bottom: 10px;
+}
+.g-toc-list {
+  display: grid;
+  gap: 6px;
+}
+.g-toc-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  text-decoration: none;
+  color: var(--text-1);
+  font-size: 13px;
+  font-weight: 600;
+  transition: all 0.15s;
+  letter-spacing: -0.005em;
+}
+.g-toc-item:active { transform: scale(0.985); background: var(--accent-soft); border-color: var(--accent-border); }
+.g-toc-num {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent);
+  color: #fff;
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 700;
+  font-size: 11px;
+  border-radius: 6px;
+}
+.g-toc-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.g-toc-arrow { color: var(--text-3); font-size: 16px; line-height: 1; }
+
+/* ===== SECTION ===== */
+.g-section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 20px;
+  margin-top: 14px;
+  scroll-margin-top: 80px;
+}
+.g-section-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+}
+.g-section-num {
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent);
+  color: #fff;
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 800;
+  font-size: 13px;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(255, 87, 34, 0.25);
+}
+.g-section-title {
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--text-1);
+  letter-spacing: -0.02em;
+}
+.g-section-icon {
+  margin-left: auto;
+  font-size: 20px;
+  opacity: 0.8;
+}
+
+/* ===== TYPOGRAPHY ===== */
+.g-h3 {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-1);
+  margin: 16px 0 8px;
+  letter-spacing: -0.01em;
+}
+.g-h3:first-child { margin-top: 0; }
+.g-p {
+  font-size: 13px;
+  color: var(--text-2);
+  line-height: 1.65;
+  margin-bottom: 10px;
+}
+.g-p:last-child { margin-bottom: 0; }
+.g-p b { color: var(--text-1); font-weight: 700; }
+.g-p code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11.5px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  padding: 1px 6px;
+  border-radius: 4px;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.g-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.g-list li {
+  position: relative;
+  padding-left: 24px;
+  font-size: 13px;
+  color: var(--text-2);
+  line-height: 1.55;
+}
+.g-list li::before {
+  content: '';
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.g-list li b { color: var(--text-1); font-weight: 700; }
+
+.g-olist {
+  padding-left: 22px;
+  margin: 0 0 10px;
+  font-size: 13px;
+  color: var(--text-2);
+  line-height: 1.7;
+}
+.g-olist li { margin-bottom: 6px; padding-left: 4px; }
+.g-olist li b { color: var(--text-1); font-weight: 700; }
+
+/* ===== CARD / NOTE ===== */
+.g-note {
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+  border-radius: 12px;
+  padding: 12px 14px;
+  font-size: 12.5px;
+  color: var(--text-2);
+  line-height: 1.6;
+  margin: 12px 0;
+}
+.g-note b { color: var(--accent); font-weight: 700; }
+.g-note-title {
+  font-weight: 800;
+  color: var(--accent);
+  display: block;
+  margin-bottom: 4px;
+  font-size: 12px;
+  letter-spacing: -0.005em;
+}
+
+.g-card {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin: 10px 0;
+}
+.g-card-title {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--text-1);
+  margin-bottom: 6px;
+}
+.g-card p {
+  font-size: 12px;
+  color: var(--text-2);
+  line-height: 1.55;
+  margin: 0;
+}
+.g-card p + p { margin-top: 6px; }
+.g-card b { color: var(--text-1); font-weight: 700; }
+
+/* ===== BẢNG ===== */
+.g-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+  margin: 10px 0;
+  background: var(--surface);
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+.g-table th {
+  background: var(--surface-2);
+  text-align: left;
+  padding: 10px 12px;
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-3);
+  border-bottom: 1px solid var(--border);
+}
+.g-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-2);
+  vertical-align: top;
+}
+.g-table tr:last-child td { border-bottom: none; }
+.g-table b { color: var(--text-1); font-weight: 700; }
+.g-table code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  background: var(--surface-2);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+/* ===== CODE BLOCK ===== */
+.g-code {
+  background: #0d1117;
+  color: #c9d1d9;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  padding: 12px 14px;
+  border-radius: 10px;
+  overflow-x: auto;
+  margin: 10px 0;
+  border: 1px solid #30363d;
+  white-space: pre;
+}
+.g-code b { color: #ff6e40; font-weight: 700; }
+
+/* ===== BADGE ===== */
+.g-badge {
+  display: inline-block;
+  font-size: 10.5px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 6px;
+  border: 1px solid;
+  letter-spacing: 0.2px;
+}
+.g-badge-accent  { color: var(--accent);  background: var(--accent-soft);  border-color: var(--accent-border); }
+.g-badge-success { color: var(--success); background: var(--success-bg); border-color: var(--success); }
+.g-badge-warning { color: var(--warning); background: var(--warning-bg); border-color: var(--warning); }
+.g-badge-danger  { color: var(--danger);  background: var(--danger-bg);  border-color: var(--danger); }
+
+/* ===== SCREENSHOTS ===== */
+.g-screenshot-wrap {
+  margin: 14px 0;
+  border-radius: 14px;
+  overflow: hidden;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+.g-screenshot {
+  width: 100%;
+  height: auto;
+  display: block;
+  cursor: zoom-in;
+  transition: transform 0.2s;
+}
+.g-screenshot:active { transform: scale(0.995); }
+.g-screenshot-caption {
+  padding: 10px 14px;
+  font-size: 11.5px;
+  color: var(--text-3);
+  font-weight: 600;
+  text-align: center;
+  border-top: 1px solid var(--border);
+  background: var(--surface-2);
+  letter-spacing: 0.1px;
+}
+
+/* Lightbox */
+#gLightbox {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.95);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 999;
+  padding: 16px;
+}
+#gLightbox.active { display: flex; }
+#gLightbox img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 8px;
+}
+#gLightbox .g-lb-close {
+  position: absolute;
+  top: calc(12px + env(safe-area-inset-top, 0));
+  right: 12px;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+  border: none;
+  font-size: 22px;
+  font-weight: 700;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+}
+
+/* ===== FOOTER ===== */
+.g-footer {
+  margin-top: 24px;
+  padding: 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  text-align: center;
+}
+.g-footer-text {
+  font-size: 12px;
+  color: var(--text-3);
+  line-height: 1.6;
+  margin-bottom: 14px;
+}
+.g-footer-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 13px 22px;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 12px;
+  font-family: inherit;
+  font-size: 13.5px;
+  font-weight: 700;
+  cursor: pointer;
+  text-decoration: none;
+  box-shadow: 0 4px 14px rgba(255, 87, 34, 0.3);
+  transition: all 0.15s;
+  letter-spacing: -0.005em;
+  width: 100%;
+  max-width: 320px;
+}
+.g-footer-btn:active { transform: scale(0.97); }
+.g-footer-btn svg { width: 18px; height: 18px; }
+
+@media (max-width: 360px) {
+  .g-section { padding: 16px; }
+  .g-hero-title { font-size: 20px; }
+  .g-section-title { font-size: 15px; }
+  .g-section-num { width: 26px; height: 26px; font-size: 12px; }
+  .g-toc-item { font-size: 12.5px; padding: 10px 11px; }
+}
+</style>
+</head>
+<body>
+
+<!-- ============ HEADER STICKY ============ -->
+<header class="g-header">
+  <div class="g-header-inner">
+    <a href="./index.html" class="g-back-btn" aria-label="Quay lại">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="19" y1="12" x2="5" y2="12"/>
+        <polyline points="12 19 5 12 12 5"/>
+      </svg>
+    </a>
+    <div class="g-title">Hướng dẫn sử dụng</div>
+  </div>
+</header>
+
+<div class="g-shell">
+
+  <!-- ============ HERO ============ -->
+  <section class="g-hero">
+    <div class="g-hero-title">SPX Tracker</div>
+    <div class="g-hero-sub">Theo dõi sản lượng & tính điểm phúc lợi SPX Express</div>
+    <span class="g-hero-version">v50.8.0</span>
+  </section>
+
+  <!-- ============ MỤC LỤC ============ -->
+  <nav class="g-toc">
+    <div class="g-toc-title">📌 Mục lục</div>
+    <div class="g-toc-list">
+      <a href="#s1"  class="g-toc-item"><span class="g-toc-num">1</span><span class="g-toc-text">Giới thiệu</span><span class="g-toc-arrow">›</span></a>
+      <a href="#s2"  class="g-toc-item"><span class="g-toc-num">2</span><span class="g-toc-text">Cài đặt & Truy cập</span><span class="g-toc-arrow">›</span></a>
+      <a href="#s3"  class="g-toc-item"><span class="g-toc-num">3</span><span class="g-toc-text">Tổng quan giao diện</span><span class="g-toc-arrow">›</span></a>
+      <a href="#s4"  class="g-toc-item"><span class="g-toc-num">4</span><span class="g-toc-text">Bắt đầu nhanh</span><span class="g-toc-arrow">›</span></a>
+      <a href="#s5"  class="g-toc-item"><span class="g-toc-num">5</span><span class="g-toc-text">Nhập sản lượng</span><span class="g-toc-arrow">›</span></a>
+      <a href="#s6"  class="g-toc-item"><span class="g-toc-num">6</span><span class="g-toc-text">Thu nhập & hạng theo tháng</span><span class="g-toc-arrow">›</span></a>
+      <a href="#s7"  class="g-toc-item"><span class="g-toc-num">7</span><span class="g-toc-text">Đọc hiểu dữ liệu</span><span class="g-toc-arrow">›</span></a>
+      <a href="#s8"  class="g-toc-item"><span class="g-toc-num">8</span><span class="g-toc-text">Chọn kỳ xem (tháng)</span><span class="g-toc-arrow">›</span></a>
+      <a href="#s9"  class="g-toc-item"><span class="g-toc-num">9</span><span class="g-toc-text">Hạng thưởng</span><span class="g-toc-arrow">›</span></a>
+      <a href="#s10" class="g-toc-item"><span class="g-toc-num">10</span><span class="g-toc-text">Nhật ký — Sửa/Xóa</span><span class="g-toc-arrow">›</span></a>
+      <a href="#s11" class="g-toc-item"><span class="g-toc-num">11</span><span class="g-toc-text">Backup & Cloud</span><span class="g-toc-arrow">›</span></a>
+      <a href="#s12" class="g-toc-item"><span class="g-toc-num">12</span><span class="g-toc-text">Cài đặt khác</span><span class="g-toc-arrow">›</span></a>
+      <a href="#s13" class="g-toc-item"><span class="g-toc-num">13</span><span class="g-toc-text">Xử lý sự cố</span><span class="g-toc-arrow">›</span></a>
+      <a href="#s14" class="g-toc-item"><span class="g-toc-num">14</span><span class="g-toc-text">Câu hỏi thường gặp</span><span class="g-toc-arrow">›</span></a>
+    </div>
+  </nav>
+
+  <!-- ============ 1. GIỚI THIỆU ============ -->
+  <section class="g-section" id="s1">
+    <div class="g-section-head">
+      <div class="g-section-num">1</div>
+      <div class="g-section-title">Giới thiệu</div>
+      <span class="g-section-icon">📖</span>
+    </div>
+    <p class="g-p"><b>SPX Tracker</b> là ứng dụng web (PWA) giúp tài xế SPX Express:</p>
+    <ul class="g-list">
+      <li>📊 <b>Theo dõi sản lượng</b> hàng ngày theo 8 dải khối lượng</li>
+      <li>🎯 <b>Tính điểm phúc lợi</b> theo chính sách công ty</li>
+      <li>📷 <b>Quét ảnh</b> chụp màn hình SPX — tự động nhập liệu</li>
+      <li>💰 <b>Thu nhập + hạng thưởng</b> lưu riêng theo từng tháng</li>
+      <li>☁️ <b>Backup Cloud</b> qua GitHub Gist — không mất dữ liệu</li>
+      <li>🔄 <b>Tự cập nhật</b> khi có bản mới — không cần xóa cache</li>
+      <li>📱 <b>Chạy offline</b> — không cần mạng sau lần đầu tải</li>
+    </ul>
+    <div class="g-note">
+      <span class="g-note-title">💡 Không cần tài khoản</span>
+      Không cần đăng ký. Dữ liệu lưu ngay trên điện thoại bạn.
+    </div>
+  </section>
+
+  <!-- ============ 2. CÀI ĐẶT ============ -->
+  <section class="g-section" id="s2">
+    <div class="g-section-head">
+      <div class="g-section-num">2</div>
+      <div class="g-section-title">Cài đặt & Truy cập</div>
+      <span class="g-section-icon">📲</span>
+    </div>
+
+    <h3 class="g-h3">🌐 Cách 1: Dùng trên trình duyệt</h3>
+    <ol class="g-olist">
+      <li>Mở <b>Chrome / Safari</b> trên điện thoại</li>
+      <li>Truy cập: <code>https://linhshope124-a11y.github.io/Linh/</code></li>
+      <li>Đợi 5-10 giây — app tự tải về (~15MB lần đầu)</li>
+      <li>Dùng được luôn</li>
+    </ol>
+
+    <h3 class="g-h3">📱 Cách 2: Cài như app (khuyến nghị)</h3>
+    <div class="g-card">
+      <div class="g-card-title">🤖 Trên Android (Chrome)</div>
+      <p>1. Mở URL ở trên</p>
+      <p>2. Chạm <b>⋮</b> góc phải → <b>Thêm vào màn hình chính</b></p>
+      <p>3. Đặt tên → Thêm → Biểu tượng SPX xuất hiện</p>
+    </div>
+    <div class="g-card">
+      <div class="g-card-title">🍎 Trên iPhone (Safari)</div>
+      <p>1. Mở URL trên</p>
+      <p>2. Chạm biểu tượng <b>Chia sẻ</b> (hộp có mũi tên)</p>
+      <p>3. Chọn <b>Thêm vào màn hình chính</b> → Thêm</p>
+    </div>
+
+    <div class="g-note">
+      <span class="g-note-title">✅ Lợi ích khi cài</span>
+      Mở nhanh như app thật · Chạy toàn màn hình · Tự cập nhật khi có bản mới
+    </div>
+  </section>
+
+  <!-- ============ 3. GIAO DIỆN ============ -->
+  <section class="g-section" id="s3">
+    <div class="g-section-head">
+      <div class="g-section-num">3</div>
+      <div class="g-section-title">Tổng quan giao diện</div>
+      <span class="g-section-icon">🎨</span>
+    </div>
+
+    <div class="g-screenshot-wrap">
+      <img src="./overview.png" alt="Màn hình Tổng quan" class="g-screenshot" onclick="openLightbox(this.src)">
+      <div class="g-screenshot-caption">Màn hình Tổng quan — tab T.Quan</div>
+    </div>
+
+    <h3 class="g-h3">🧭 5 Tab chính</h3>
+    <table class="g-table">
+      <thead><tr><th>Tab</th><th>Chức năng</th></tr></thead>
+      <tbody>
+        <tr><td><b>T.Quan</b></td><td>Tổng điểm, 3 loại đơn, cơ hội tăng điểm</td></tr>
+        <tr><td><b>Giao</b></td><td>Chi tiết bảng 8 dải khối lượng Giao</td></tr>
+        <tr><td><b>📷</b> (giữa)</td><td>Quét ảnh OCR</td></tr>
+        <tr><td><b>Lấy</b></td><td>Chi tiết bảng 8 dải Lấy</td></tr>
+        <tr><td><b>Hoàn</b></td><td>Chi tiết bảng 8 dải Hoàn</td></tr>
+      </tbody>
+    </table>
+
+    <div class="g-screenshot-wrap">
+      <img src="./pickup.png" alt="Tab Lấy — chi tiết 8 dải" class="g-screenshot" onclick="openLightbox(this.src)">
+      <div class="g-screenshot-caption">Tab Lấy — chi tiết 8 dải khối lượng</div>
+    </div>
+  </section>
+
+  <!-- ============ 4. BẮT ĐẦU NHANH ============ -->
+  <section class="g-section" id="s4">
+    <div class="g-section-head">
+      <div class="g-section-num">4</div>
+      <div class="g-section-title">Bắt đầu nhanh</div>
+      <span class="g-section-icon">🚀</span>
+    </div>
+
+    <div class="g-card">
+      <div class="g-card-title">Bước 1 — Chọn khu vực + nhập lương</div>
+      <p>1. Vào tab <b>T.Quan</b> → mở <b>Thu nhập</b></p>
+      <p>2. Chọn <b>Khu vực</b>: Miền hoặc TP.HCM & HN</p>
+      <p>3. Nhập <b>LCB</b>, <b>Bưu cục</b>, <b>Tài xế</b> của tháng hiện tại</p>
+      <p>4. Bấm <b>"Lưu cấu hình tháng này"</b></p>
+    </div>
+
+    <div class="g-card">
+      <div class="g-card-title">Bước 2 — Chọn hạng thưởng</div>
+      <p>1. Vào mục <b>Hạng</b> ở tab T.Quan</p>
+      <p>2. Bấm pill hạng của bạn (VD: <b>Vàng</b>)</p>
+      <p>3. Hạng sẽ được lưu riêng cho <b>tháng đang xem</b></p>
+    </div>
+
+    <div class="g-card">
+      <div class="g-card-title">Bước 3 — Nhập sản lượng hôm nay</div>
+      <p><b>Cách 1 (nhanh):</b> Bấm <b>📷</b> ở giữa → chọn ảnh chụp màn hình SPX</p>
+      <p><b>Cách 2 (thủ công):</b> Menu <b>☰</b> → <b>Nhập sản lượng</b></p>
+    </div>
+
+    <div class="g-card">
+      <div class="g-card-title">Bước 4 — Xem kết quả</div>
+      <p>Quay về T.Quan → xem tổng điểm đã cập nhật</p>
+    </div>
+  </section>
+
+  <!-- ============ 5. NHẬP SẢN LƯỢNG ============ -->
+  <section class="g-section" id="s5">
+    <div class="g-section-head">
+      <div class="g-section-num">5</div>
+      <div class="g-section-title">Nhập sản lượng</div>
+      <span class="g-section-icon">📝</span>
+    </div>
+
+    <h3 class="g-h3">📷 Cách 1: Quét ảnh OCR (khuyến nghị)</h3>
+    <p class="g-p"><b>Chuẩn bị ảnh:</b></p>
+    <ol class="g-olist">
+      <li>Mở app SPX → vào màn hình <b>"Chi tiết đơn theo ngày"</b></li>
+      <li><b>Chụp màn hình</b> (nguồn + volume down)</li>
+      <li>Có thể chụp nhiều ảnh cùng lúc</li>
+    </ol>
+    <p class="g-p"><b>Quét:</b></p>
+    <ol class="g-olist">
+      <li>Mở SPX Tracker → bấm <b>📷</b> giữa bottom nav</li>
+      <li>Chọn <b>1 hoặc nhiều ảnh</b> cùng lúc</li>
+      <li>Đợi 5-15s → app tự nhận diện</li>
+      <li>Nếu conf ≥85% + tổng khớp → <b>tự động lưu</b> ✅</li>
+      <li>Nếu cần check → hiện <b>modal để đối chiếu</b></li>
+    </ol>
+
+    <div class="g-note">
+      <span class="g-note-title">🎨 Màu viền ô khi cần check</span>
+      🟢 Xanh = tin cậy cao · 🟡 Vàng = cần xem lại · 🔴 Đỏ = phải sửa tay<br>
+      🟠 <b>Cam = phân bố bất thường</b> (số vô lý — vd: dải 0-2 quá thấp)
+    </div>
+
+    <div class="g-note">
+      <span class="g-note-title">⚠️ Cảnh báo phân bố tự động (v50.6+)</span>
+      App tự kiểm tra <b>5 quy luật</b> để phát hiện OCR đọc nhầm dải:<br>
+      • Dải 0-2 phải chiếm ≥ 50%<br>
+      • Dải 0-2 ≥ dải 2-4 ≥ dải 4-6 (không bất thường gấp nhiều lần)<br>
+      • Không dải nào cao gấp > 5× dải 0-2<br>
+      • 3 dải nhỏ (0-2 + 2-4 + 4-6) ≥ 70% tổng<br>
+      <br>
+      Nếu vi phạm → app <b>KHÔNG tự động lưu</b>, hiện banner cam + đánh dấu ô nghi ngờ. Bạn phải <b>đối chiếu ảnh gốc</b> rồi mới lưu.
+    </div>
+
+    <h3 class="g-h3">✏️ Cách 2: Nhập tay</h3>
+    <p class="g-p">Menu <b>☰</b> → <b>Nhập sản lượng</b> → chọn ngày + nhập 8 dải:</p>
+
+    <div class="g-screenshot-wrap">
+      <img src="./entry.png" alt="Modal nhập sản lượng" class="g-screenshot" onclick="openLightbox(this.src)">
+      <div class="g-screenshot-caption">Modal nhập sản lượng — 8 dải khối lượng</div>
+    </div>
+
+    <ol class="g-olist">
+      <li>Chọn <b>Ngày ghi nhận</b> (mặc định hôm nay)</li>
+      <li>Chuyển tab <b>Giao / Lấy / Hoàn</b></li>
+      <li>Nhập số đơn cho <b>8 dải khối lượng</b></li>
+      <li>Bấm <b>Lưu dữ liệu</b></li>
+    </ol>
+
+    <div class="g-note">
+      <span class="g-note-title">💡 Mẹo nhập nhanh</span>
+      Ô nhập có <b>tự xóa số 0</b> khi chạm vào — nhập nhanh hơn.
+    </div>
+
+    <h3 class="g-h3">🚫 Báo lỗi trùng lặp</h3>
+    <p class="g-p">Nếu báo <b>"Đã tồn tại bản ghi với CÙNG số liệu"</b> → ngày đó đã nhập rồi. Muốn sửa → vào <b>Nhật ký</b> → <b>Sửa</b>.</p>
+
+    <h3 class="g-h3">📚 Quét nhiều ảnh cùng lúc</h3>
+    <ol class="g-olist">
+      <li>Bấm <b>📷</b> → chọn <b>nhiều ảnh</b> (Chrome cho ~10-20 ảnh)</li>
+      <li>App xử lý tuần tự</li>
+      <li>Ảnh tự lưu → ảnh cần check → hiện danh sách <b>Batch</b></li>
+      <li>Trong Batch: bấm <b>📝 Nhập</b> từng ảnh để check</li>
+      <li>Hoặc <b>Lưu tất cả</b> để lưu những ảnh đã pass</li>
+    </ol>
+  </section>
+
+  <!-- ============ 6. THU NHẬP & HẠNG THEO THÁNG ============ -->
+  <section class="g-section" id="s6">
+    <div class="g-section-head">
+      <div class="g-section-num">6</div>
+      <div class="g-section-title">Thu nhập & hạng theo tháng</div>
+      <span class="g-section-icon">💰</span>
+    </div>
+
+    <div class="g-note">
+      <span class="g-note-title">⚡ Đặc biệt quan trọng (v50.8.0)</span>
+      Cả <b>Lương</b> và <b>Hạng thưởng</b> đều lưu <b>RIÊNG theo từng tháng</b>. Đổi tháng → tự động chuyển sang cấu hình tháng đó.
+    </div>
+
+    <h3 class="g-h3">💡 Ví dụ</h3>
+    <pre class="g-code">Tháng 9/2026: LCB 10tr, BC 2tr, TX 1tr  + Hạng K.Cương
+Tháng 10/2026: LCB 12tr, BC 2tr, TX 1tr  + Hạng Vàng</pre>
+    <p class="g-p">Mỗi tháng <b>độc lập</b> — không ảnh hưởng nhau.</p>
+
+    <h3 class="g-h3">📝 Nhập config cho 1 tháng</h3>
+    <ol class="g-olist">
+      <li>Chọn tháng muốn nhập (dùng <b>‹ ›</b> ở header)</li>
+      <li><b>Thu nhập:</b> mở mục Thu nhập → nhập LCB/BC/TX → Lưu</li>
+      <li><b>Hạng:</b> bấm pill hạng tương ứng — tự lưu vào tháng đó</li>
+      <li>Chuyển tháng khác → thấy cấu hình tự đổi theo tháng mới ✅</li>
+    </ol>
+
+    <h3 class="g-h3">🌍 Khu vực — không theo tháng</h3>
+    <p class="g-p"><b>Khu vực</b> (Miền / TP.HCM & HN) là <b>thuộc tính nhân viên</b> — chọn 1 lần, áp dụng cho tất cả tháng.</p>
+
+    <h3 class="g-h3">📐 Công thức</h3>
+    <pre class="g-code">Lương 1 công = (LCB + Bưu cục + Tài xế) / ngày tối đa
+
+Số ngày tối đa:
+• Tháng 2 = 24
+• Tháng khác = 26
+
+Số công = Đếm ngày có:
+  Giao + (Lấy / 6) + Hoàn ≥ ngưỡng
+  • Miền:   ≥60 = 1 công, ≥30 = 0.5 công
+  • HCM/HN: ≥80 = 1 công, ≥40 = 0.5 công
+
+Tích lũy  = Lương 1 công × Số công
+Thưởng    = Gốc × %hạng
+Tổng điểm = Gốc + Thưởng + Tích lũy</pre>
+  </section>
+
+  <!-- ============ 7. ĐỌC DỮ LIỆU ============ -->
+  <section class="g-section" id="s7">
+    <div class="g-section-head">
+      <div class="g-section-num">7</div>
+      <div class="g-section-title">Đọc hiểu dữ liệu</div>
+      <span class="g-section-icon">📊</span>
+    </div>
+
+    <h3 class="g-h3">🎯 Hero (tab T.Quan)</h3>
+    <pre class="g-code">1.479 Điểm
+Gốc:    +1.100 Điểm  ← điểm từ đơn hàng
+Thưởng: +220 Điểm    ← bonus theo hạng tháng này
+TN:     +159 Điểm    ← thu nhập tháng này</pre>
+    <p class="g-p">Bấm <b>ⓘ Chi tiết</b> để mở 3 metrics này.</p>
+
+    <h3 class="g-h3">📊 Hero Tiles</h3>
+    <pre class="g-code">GIAO    LẤY    HOÀN
+301     16     1</pre>
+    <p class="g-p">Tổng số đơn <b>trong tháng đang xem</b>.</p>
+
+    <h3 class="g-h3">📋 Bảng chi tiết (tab Giao/Lấy/Hoàn)</h3>
+    <table class="g-table">
+      <thead><tr><th>Cột</th><th>Ý nghĩa</th></tr></thead>
+      <tbody>
+        <tr><td><b>KG</b></td><td>Dải khối lượng</td></tr>
+        <tr><td><b>SL</b></td><td>Số đơn đã giao/lấy/hoàn</td></tr>
+        <tr><td><b>MỐC</b></td><td>Mốc điểm hiện tại (VD: 200-300)</td></tr>
+        <tr><td><b>ĐIỂM</b></td><td>Điểm được hưởng với mốc này</td></tr>
+        <tr><td><b>CẦN</b></td><td>Cần thêm bao nhiêu đơn để lên mốc tiếp</td></tr>
+        <tr><td><b>ĐƯỢC</b></td><td>Được thêm bao nhiêu điểm khi lên mốc</td></tr>
+      </tbody>
+    </table>
+
+    <div class="g-card">
+      <div class="g-card-title">📖 Ví dụ đọc bảng</div>
+      <pre class="g-code" style="margin:8px 0 0">KG      SL    MỐC       ĐIỂM   CẦN   ĐƯỢC
+&gt;0-2    273   200-300   275    +27   +75 điểm</pre>
+      <p style="margin-top:8px">→ Bạn có 273 đơn dải &gt;0-2 → hiện được <b>275 điểm</b></p>
+      <p>→ Thêm <b>27 đơn</b> nữa → lên mốc tiếp → <b>+75 điểm</b></p>
+    </div>
+
+    <h3 class="g-h3">🎯 Cơ hội tăng điểm</h3>
+    <p class="g-p">Liệt kê <b>mọi dải</b> bạn có thể tăng điểm — sắp xếp theo hiệu quả:</p>
+
+    <div class="g-screenshot-wrap">
+      <img src="./opportunity.png" alt="Cơ hội tăng điểm" class="g-screenshot" onclick="openLightbox(this.src)">
+      <div class="g-screenshot-caption">Mục "Cơ hội tăng điểm" — gợi ý ưu tiên</div>
+    </div>
+
+    <div class="g-note">
+      <span class="g-note-title">💡 Mẹo tối ưu</span>
+      Ưu tiên dải có <b>+CẦN nhỏ</b> mà <b>+ĐƯỢC lớn</b> → tăng điểm hiệu quả nhất.
+    </div>
+  </section>
+
+  <!-- ============ 8. CHỌN KỲ XEM ============ -->
+  <section class="g-section" id="s8">
+    <div class="g-section-head">
+      <div class="g-section-num">8</div>
+      <div class="g-section-title">Chọn kỳ xem (tháng)</div>
+      <span class="g-section-icon">📅</span>
+    </div>
+
+    <h3 class="g-h3">🧭 Header cluster</h3>
+    <pre class="g-code">[‹]  Tháng 10/2026  [›]</pre>
+
+    <table class="g-table">
+      <thead><tr><th>Nút</th><th>Chức năng</th></tr></thead>
+      <tbody>
+        <tr><td><b>‹</b></td><td>Lùi 1 tháng</td></tr>
+        <tr><td><b>Label giữa</b></td><td>Chạm mở bộ chọn tháng</td></tr>
+        <tr><td><b>›</b></td><td>Tiến 1 tháng</td></tr>
+        <tr><td><b>🕰</b> (góc phải)</td><td>Nhảy về tháng có dữ liệu gần nhất</td></tr>
+        <tr><td><b>☰</b> (góc trái)</td><td>Mở Menu</td></tr>
+      </tbody>
+    </table>
+
+    <h3 class="g-h3">📅 Giới hạn</h3>
+    <ul class="g-list">
+      <li>Lùi tối đa: <b>Tháng 1/2020</b></li>
+      <li>Tiến tối đa: <b>Tháng hiện tại</b> (không vượt tương lai)</li>
+    </ul>
+
+    <div class="g-note">
+      <span class="g-note-title">💡 Mẹo</span>
+      Muốn xem <b>tháng 3</b> → bấm <b>🕰</b> để nhảy nhanh.<br>
+      Muốn xem <b>tháng xa</b> → bấm label giữa → chọn từ picker.
+    </div>
+  </section>
+
+  <!-- ============ 9. HẠNG THƯỞNG ============ -->
+  <section class="g-section" id="s9">
+    <div class="g-section-head">
+      <div class="g-section-num">9</div>
+      <div class="g-section-title">Hạng thưởng</div>
+      <span class="g-section-icon">🏆</span>
+    </div>
+
+    <div class="g-note">
+      <span class="g-note-title">⚡ Lưu theo từng tháng (v50.8.0)</span>
+      Hạng được lưu <b>riêng cho tháng đang xem</b>. Chuyển tháng → pill hạng tự động đổi theo tháng đó.
+    </div>
+
+    <table class="g-table">
+      <thead><tr><th>Hạng</th><th>Bonus</th></tr></thead>
+      <tbody>
+        <tr><td>Chuẩn (không chọn)</td><td><b>+0%</b></td></tr>
+        <tr><td><b>Đồng</b></td><td><span class="g-badge g-badge-accent">+10%</span></td></tr>
+        <tr><td><b>Bạc</b></td><td><span class="g-badge g-badge-accent">+15%</span></td></tr>
+        <tr><td><b>Vàng</b></td><td><span class="g-badge g-badge-accent">+20%</span></td></tr>
+        <tr><td><b>Bạch Kim</b></td><td><span class="g-badge g-badge-accent">+22%</span></td></tr>
+        <tr><td><b>Kim Cương</b></td><td><span class="g-badge g-badge-accent">+26%</span></td></tr>
+      </tbody>
+    </table>
+
+    <h3 class="g-h3">🎯 Cách chọn</h3>
+    <ul class="g-list">
+      <li><b>Chạm 1 lần</b> vào pill → chọn hạng cho tháng đang xem</li>
+      <li><b>Nhấn giữ 0.5s</b> pill đang active → bỏ chọn (về Chuẩn)</li>
+      <li>Chuyển tháng khác → pill tự đổi theo hạng của tháng đó</li>
+    </ul>
+
+    <h3 class="g-h3">💡 Công thức</h3>
+    <pre class="g-code">Thưởng = Gốc × %hạng
+
+VD: Gốc 1.100 điểm, hạng Vàng (+20%)
+    → Thưởng = 220 điểm</pre>
+  </section>
+
+  <!-- ============ 10. NHẬT KÝ ============ -->
+  <section class="g-section" id="s10">
+    <div class="g-section-head">
+      <div class="g-section-num">10</div>
+      <div class="g-section-title">Nhật ký — Sửa/Xóa</div>
+      <span class="g-section-icon">📂</span>
+    </div>
+
+    <h3 class="g-h3">📂 Truy cập</h3>
+    <p class="g-p">Menu <b>☰</b> → <b>Nhật ký</b></p>
+
+    <h3 class="g-h3">🎛️ Bộ lọc</h3>
+    <pre class="g-code">[Tất cả]  [Giao]  [Lấy]  [Hoàn]</pre>
+    <ul class="g-list">
+      <li><b>Tất cả</b> — hiện tất cả bản ghi trong tháng</li>
+      <li><b>Giao/Lấy/Hoàn</b> — chỉ hiện loại tương ứng</li>
+    </ul>
+
+    <h3 class="g-h3">✏️ Sửa bản ghi</h3>
+    <ol class="g-olist">
+      <li>Tìm bản ghi muốn sửa</li>
+      <li>Bấm nút <b>Sửa</b></li>
+      <li>Modal mở với số liệu cũ</li>
+      <li>Sửa số → Bấm <b>Lưu dữ liệu</b></li>
+      <li>Banner "Hoàn tác" hiện 5s — bấm để hủy nếu sửa nhầm</li>
+    </ol>
+
+    <h3 class="g-h3">🗑️ Xóa bản ghi</h3>
+    <ol class="g-olist">
+      <li>Bấm nút <b>Xóa</b></li>
+      <li>Xác nhận → Xóa</li>
+      <li>Banner "Hoàn tác" hiện 5s</li>
+    </ol>
+
+    <h3 class="g-h3">🔄 Hoàn tác (Undo)</h3>
+    <p class="g-p">Sau khi <b>Sửa/Xóa</b>, banner đen hiện ở dưới:</p>
+    <pre class="g-code">Đã xóa bản ghi... [Hoàn tác]</pre>
+    <p class="g-p"><b>Bấm "Hoàn tác" trong 5s</b> → khôi phục lại. Sau 5s → mất.</p>
+  </section>
+
+  <!-- ============ 11. BACKUP ============ -->
+  <section class="g-section" id="s11">
+    <div class="g-section-head">
+      <div class="g-section-num">11</div>
+      <div class="g-section-title">Backup & Cloud</div>
+      <span class="g-section-icon">☁️</span>
+    </div>
+
+    <div class="g-note">
+      <span class="g-note-title">💾 Tại sao cần</span>
+      Reset máy / xóa cache → dữ liệu local sẽ mất. Cloud backup giúp khôi phục.
+    </div>
+
+    <h3 class="g-h3">🔑 Setup lần đầu (5 phút)</h3>
+
+    <div class="g-card">
+      <div class="g-card-title">Bước 1 — Lấy GitHub Token</div>
+      <p>1. Vào <code>github.com/settings/tokens</code> (đăng nhập GitHub)</p>
+      <p>2. Bấm <b>Generate new token (classic)</b></p>
+      <p>3. <b>Note:</b> <code>spx-backup</code></p>
+      <p>4. <b>Expiration:</b> <code>No expiration</code></p>
+      <p>5. <b>Scope:</b> Tích <code>gist</code></p>
+      <p>6. Bấm <b>Generate</b> → Copy token (<code>ghp_...</code>)</p>
+    </div>
+
+    <div class="g-card">
+      <div class="g-card-title">Bước 2 — Nhập vào app</div>
+      <p>1. Menu <b>☰</b> → <b>Backup & Cloud</b></p>
+      <p>2. Dán token vào ô <b>GitHub Token</b></p>
+      <p>3. Bấm <b>🔌 Kiểm tra</b> → thấy "✅ OK — username"</p>
+      <p>4. Bấm <b>☁️ Backup</b> → tạo Gist lần đầu</p>
+      <p>5. Gist ID tự động điền</p>
+    </div>
+
+    <div class="g-card">
+      <div class="g-card-title">Bước 3 — Bật auto</div>
+      <p>1. Tích <b>"Tự động backup sau mỗi thay đổi"</b></p>
+      <p>2. Từ giờ, mỗi lần nhập sản lượng → tự backup sau 10s</p>
+    </div>
+
+    <h3 class="g-h3">⬇️ Khôi phục từ Cloud</h3>
+    <ol class="g-olist">
+      <li>Menu <b>☰</b> → <b>Backup & Cloud</b></li>
+      <li>Bấm <b>⬇️ Khôi phục từ Cloud</b></li>
+      <li>Xác nhận → app tải dữ liệu về</li>
+      <li>Nếu app đang có data → app <b>hỏi bạn chọn</b>:
+        <ul class="g-list" style="margin-top:6px">
+          <li><b>OK</b> → GHI ĐÈ (xóa hết cũ, thay bằng Cloud)</li>
+          <li><b>Cancel</b> → THÊM VÀO (giữ cũ + thêm mới, skip trùng)</li>
+        </ul>
+      </li>
+    </ol>
+
+    <h3 class="g-h3">📁 Sao lưu cục bộ (file JSON)</h3>
+    <ul class="g-list">
+      <li><b>💾 Lưu file</b> — tải file <code>SPX_Data_2026-10-03.json</code></li>
+      <li><b>📥 Nạp file</b> — chọn file JSON đã lưu (cũng hỏi GHI ĐÈ / THÊM VÀO)</li>
+      <li><b>📋 Chép</b> — copy JSON vào clipboard</li>
+      <li><b>📝 Dán</b> — dán JSON vào để khôi phục</li>
+    </ul>
+
+    <div class="g-note">
+      <span class="g-note-title">🆕 v50.8.0 — Nạp không mất data</span>
+      Trước đây: nạp file → <b>ghi đè</b> luôn.<br>
+      Giờ đây: nếu app đang có data → app <b>hỏi bạn</b> muốn <b>GHI ĐÈ</b> hay <b>THÊM VÀO</b>.<br>
+      Chọn <b>Cancel</b> để giữ nguyên dữ liệu hiện tại + thêm mới từ file (bỏ qua bản ghi trùng).
+    </div>
+
+    <h3 class="g-h3">🔄 Phục hồi tự động (Vault)</h3>
+    <p class="g-p">App tự lưu <b>bản sao</b> vào localStorage mỗi lần đổi data. Nếu mất data local → bấm <b>🔄 Phục hồi tự động</b>.</p>
+  </section>
+
+  <!-- ============ 12. CÀI ĐẶT KHÁC ============ -->
+  <section class="g-section" id="s12">
+    <div class="g-section-head">
+      <div class="g-section-num">12</div>
+      <div class="g-section-title">Cài đặt khác</div>
+      <span class="g-section-icon">⚙️</span>
+    </div>
+
+    <div class="g-card">
+      <div class="g-card-title">🌙 Chế độ tối</div>
+      <p>Menu <b>☰</b> → <b>Chế độ tối</b> → chuyển sang giao diện tối</p>
+    </div>
+
+    <div class="g-screenshot-wrap">
+      <img src="./overview-dark.png" alt="Dark mode" class="g-screenshot" onclick="openLightbox(this.src)">
+      <div class="g-screenshot-caption">Giao diện Dark mode — tab T.Quan</div>
+    </div>
+
+    <div class="g-card">
+      <div class="g-card-title">🔄 Cập nhật app (v50.7.2+)</div>
+      <p>App <b>tự kiểm tra bản mới</b> mỗi 5 phút. Khi có bản mới → hiện banner cam ở dưới màn hình:</p>
+      <p style="background:var(--surface);border:1px solid var(--accent-border);border-radius:8px;padding:8px 10px;margin-top:6px;font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--accent)">🎉 Có bản mới v50.8.0! [Cập nhật]</p>
+      <p style="margin-top:8px">Bấm <b>"Cập nhật"</b> → app tự reload, <b>dữ liệu giữ nguyên</b>.</p>
+      <p>Nếu không thấy banner → Menu <b>☰</b> → <b>🔄 Kiểm tra cập nhật</b> để check thủ công.</p>
+    </div>
+
+    <div class="g-card">
+      <div class="g-card-title">🧹 Dọn bản ghi trùng</div>
+      <p>Menu <b>☰</b> → <b>Backup & Cloud</b> → kéo xuống → <b>Dọn bản ghi trùng lặp</b></p>
+      <p>Tìm và xóa các bản ghi cùng ngày + cùng số liệu.</p>
+    </div>
+
+    <div class="g-card">
+      <div class="g-card-title">⚠️ Xóa toàn bộ nhật ký</div>
+      <p>Menu <b>☰</b> → <b>Backup & Cloud</b> → kéo xuống đáy → <b>Xóa toàn bộ nhật ký</b></p>
+      <p style="color:var(--danger);font-weight:700">⚠️ KHÔNG THỂ KHÔI PHỤC! Backup trước khi xóa.</p>
+    </div>
+
+    <div class="g-card">
+      <div class="g-card-title">❤️ Ủng hộ tác giả</div>
+      <p>Menu <b>☰</b> → <b>Ủng hộ tác giả</b> → Viettinbank</p>
+    </div>
+  </section>
+
+  <!-- ============ 13. XỬ LÝ SỰ CỐ ============ -->
+  <section class="g-section" id="s13">
+    <div class="g-section-head">
+      <div class="g-section-num">13</div>
+      <div class="g-section-title">Xử lý sự cố</div>
+      <span class="g-section-icon">🔧</span>
+    </div>
+
+    <h3 class="g-h3">🐛 OCR đọc sai</h3>
+    <p class="g-p"><b>Triệu chứng:</b> Số trong ô không khớp ảnh gốc.</p>
+    <p class="g-p"><b>Cách xử lý:</b></p>
+    <ol class="g-olist">
+      <li>Chụp lại ảnh <b>rõ nét hơn</b> (ánh sáng đủ, không rung)</li>
+      <li>Tránh chụp ảnh <b>nghiêng, mờ, bị che</b></li>
+      <li>Nếu vẫn sai → mở ảnh gốc trong modal → sửa tay số bị sai</li>
+      <li>Màu viền ô cho biết độ tin cậy: 🟢 OK · 🟡 xem lại · 🔴 sửa tay · 🟠 phân bố lạ</li>
+    </ol>
+
+    <h3 class="g-h3">🟠 Cảnh báo "Phân bố bất thường" hiện ra</h3>
+    <p class="g-p"><b>Nguyên nhân:</b> OCR đọc đúng chữ nhưng số vô lý — có thể do:</p>
+    <ul class="g-list">
+      <li>OCR nhầm số từ <b>thanh trạng thái điện thoại</b> (giờ, pin, dung lượng)</li>
+      <li>Ảnh mờ, nghiêng, hoặc bị che</li>
+      <li>Chụp nhầm màn hình không phải "Chi tiết đơn theo ngày"</li>
+    </ul>
+    <p class="g-p"><b>Cách xử lý:</b></p>
+    <ol class="g-olist">
+      <li><b>Đối chiếu ảnh gốc</b> hiện bên dưới modal với các ô nhập</li>
+      <li>Nếu sai → sửa tay số đúng từ ảnh</li>
+      <li>Nếu đúng hết → bấm <b>"Lưu dữ liệu"</b> bình thường (cảnh báo chỉ để nhắc, không chặn)</li>
+    </ol>
+
+    <h3 class="g-h3">🔄 App không cập nhật sau khi deploy</h3>
+    <p class="g-p"><b>Triệu chứng:</b> Bấm vào vẫn thấy giao diện cũ.</p>
+    <p class="g-p"><b>Cách xử lý (v50.7.2+ — khuyến nghị):</b></p>
+    <ol class="g-olist">
+      <li>Menu <b>☰</b> → <b>🔄 Kiểm tra cập nhật</b></li>
+      <li>Nếu có bản mới → bấm <b>"Cập nhật"</b> trên banner → app tự reload</li>
+      <li>Nếu vẫn cũ → tắt hẳn app → mở lại (sẽ tự tải bản mới sau ~2s)</li>
+    </ol>
+    <p class="g-p"><b>Cách xử lý (phiên bản cũ — chỉ khi cần):</b></p>
+    <ol class="g-olist">
+      <li>Chạm 🔒 (ổ khóa) trên URL → <b>Xóa dữ liệu trang</b></li>
+      <li>Nhấn nút □ → <b>vuốt Chrome lên</b> để kill hẳn</li>
+      <li>Mở lại URL → tải bản mới</li>
+    </ol>
+
+    <h3 class="g-h3">💥 Mất dữ liệu</h3>
+    <p class="g-p"><b>Nguyên nhân:</b> Xóa cache Chrome / reset máy.</p>
+    <p class="g-p"><b>Cách khôi phục:</b></p>
+    <ol class="g-olist">
+      <li>Mở app → Menu <b>☰</b> → <b>Backup & Cloud</b></li>
+      <li>Bấm <b>⬇️ Khôi phục từ Cloud</b> (nếu đã setup)</li>
+      <li>Hoặc <b>🔄 Phục hồi tự động</b> (nếu vault còn)</li>
+      <li>Hoặc <b>📥 Nạp file</b> (nếu có file JSON backup)</li>
+    </ol>
+
+    <h3 class="g-h3">⚠️ Báo "Đã tồn tại bản ghi cùng số liệu"</h3>
+    <p class="g-p"><b>Nguyên nhân:</b> Ngày đó bạn đã nhập rồi với <b>cùng số</b>.</p>
+    <p class="g-p"><b>Cách xử lý:</b></p>
+    <ul class="g-list">
+      <li>Nếu muốn sửa → vào <b>Nhật ký</b> → bấm <b>Sửa</b> bản ghi cũ</li>
+      <li>Nếu số thực tế khác → sửa số liệu trước khi lưu</li>
+    </ul>
+
+    <h3 class="g-h3">📷 Không thấy nút quét</h3>
+    <p class="g-p"><b>Cách xử lý:</b> Đóng app hoàn toàn → mở lại.</p>
+
+    <h3 class="g-h3">🎯 Điểm không đúng chính sách</h3>
+    <p class="g-p"><b>Kiểm tra:</b></p>
+    <ol class="g-olist">
+      <li><b>Khu vực</b> đã đúng chưa? (Miền / HCM-HN)</li>
+      <li><b>Hạng thưởng</b> của <b>tháng đang xem</b> đã chọn chưa?</li>
+      <li><b>Config lương</b> của tháng đúng chưa?</li>
+      <li>Số liệu <b>SL</b> có bị nhập sai dải không?</li>
+    </ol>
+    <p class="g-p">Nếu vẫn sai → báo tác giả kèm screenshot.</p>
+  </section>
+
+  <!-- ============ 14. FAQ ============ -->
+  <section class="g-section" id="s14">
+    <div class="g-section-head">
+      <div class="g-section-num">14</div>
+      <div class="g-section-title">Câu hỏi thường gặp</div>
+      <span class="g-section-icon">❓</span>
+    </div>
+
+    <div class="g-card">
+      <div class="g-card-title">❓ App có mất phí không?</div>
+      <p><b>Không.</b> Miễn phí 100%, không quảng cáo.</p>
+    </div>
+
+    <div class="g-card">
+      <div class="g-card-title">❓ Dữ liệu lưu ở đâu?</div>
+      <p><b>Trên máy bạn</b> (localStorage). Không gửi lên server. Cloud backup là tùy chọn.</p>
+    </div>
+
+    <div class="g-card">
+      <div class="g-card-title">❓ Xóa app có mất dữ liệu?</div>
+      <p>Xóa app khỏi màn hình chính → <b>KHÔNG</b> mất (chỉ mất icon).</p>
+      <p>Xóa dữ liệu trình duyệt → <b>MẤT</b>.</p>
+    </div>
+
+    <div class="g-card">
+      <div class="g-card-title">❓ Có dùng trên nhiều máy không?</div>
+      <p>Chưa hỗ trợ sync đa thiết bị. Muốn dùng nhiều máy → dùng <b>Cloud backup</b> (backup máy A → restore máy B).</p>
+    </div>
+
+    <div class="g-card">
+      <div class="g-card-title">❓ Lương/hạng tháng cũ có bị đổi khi sửa tháng mới?</div>
+      <p><b>Không.</b> Mỗi tháng lưu <b>riêng biệt</b> — cả lương và hạng. Đây là tính năng v50.8.0.</p>
+    </div>
+
+    <div class="g-card">
+      <div class="g-card-title">❓ Có cần mạng để dùng không?</div>
+      <p>Chỉ cần mạng lần đầu (~15MB). Sau đó chạy <b>offline</b> hoàn toàn.</p>
+    </div>
+
+    <div class="g-card">
+      <div class="g-card-title">❓ Làm sao biết app đã cập nhật phiên bản mới?</div>
+      <p>Xem số version ở đầu trang này. Hoặc khi có banner <b>"🎉 Có bản mới"</b> hiện ra → bấm <b>"Cập nhật"</b>.</p>
+    </div>
+
+    <div class="g-card">
+      <div class="g-card-title">❓ Tôi có 2 tài khoản SPX, làm sao?</div>
+      <p>Hiện tại app <b>chưa hỗ trợ</b> nhiều tài khoản. Muốn tách → dùng <b>2 điện thoại</b> hoặc <b>2 trình duyệt</b> khác nhau.</p>
+    </div>
+
+    <div class="g-card">
+      <div class="g-card-title">❓ Điểm tính theo tháng hay năm?</div>
+      <p>Theo <b>tháng</b>. Điểm tổng ở Hero là <b>của tháng đang xem</b>.</p>
+    </div>
+
+    <div class="g-card">
+      <div class="g-card-title">❓ Gặp bug thì báo ai?</div>
+      <p>Nhắn tác giả qua <b>Ủng hộ tác giả</b> hoặc gửi screenshot + mô tả ngắn.</p>
+    </div>
+  </section>
+
+  <!-- ============ FOOTER ============ -->
+  <footer class="g-footer">
+    <div class="g-footer-text">
+      <b>SPX Tracker v50.8.0</b><br>
+      Made with ❤️ for SPX drivers
+    </div>
+    <a href="./index.html" class="g-footer-btn">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="19" y1="12" x2="5" y2="12"/>
+        <polyline points="12 19 5 12 12 5"/>
+      </svg>
+      <span>Quay lại app</span>
+    </a>
+  </footer>
+
+</div>
+
+<!-- ============ LIGHTBOX ẢNH ============ -->
+<div id="gLightbox" onclick="closeLightbox()">
+  <button class="g-lb-close" onclick="closeLightbox()" aria-label="Đóng">✕</button>
+  <img id="gLightboxImg" alt="Ảnh phóng to" onclick="event.stopPropagation()">
+</div>
+
+<script>
+// Đồng bộ theme sáng/tối với app
+(function() {
+  try {
+    const theme = localStorage.getItem('spx_theme') || 'light';
+    document.documentElement.setAttribute('data-theme', theme);
+  } catch (e) {
+    document.documentElement.setAttribute('data-theme', 'light');
+  }
+})();
+
+// Lightbox ảnh
+function openLightbox(src) {
+  const lb = document.getElementById('gLightbox');
+  const img = document.getElementById('gLightboxImg');
+  if (!lb || !img) return;
+  img.src = src;
+  lb.classList.add('active');
+}
+function closeLightbox() {
+  const lb = document.getElementById('gLightbox');
+  if (lb) lb.classList.remove('active');
+}
+</script>
+
+</body>
+</html>
