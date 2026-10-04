@@ -8,6 +8,7 @@ import { APP_VERSION, STORAGE_KEYS, WEIGHT_KEYS } from './config.js';
 import { getTodayIso } from './utils.js';
 import { updateAllViews } from './render.js';
 import { initRankUI, initRegionUI, showToast } from './ui.js';
+import { showAlert, showConfirm } from './dialog.js';
 
 // ==================== HELPERS ====================
 function weightsEqual(a, b) {
@@ -35,7 +36,7 @@ export function copyDataJson() {
   const ok = () => {
     btn.innerHTML = '✓ Đã chép!';
     btn.style.background = '#10b981'; btn.style.borderColor = '#10b981'; btn.style.color = '#fff';
-    setTimeout(() => { btn.innerHTML = '📋 Chép JSON'; btn.style.background = ''; btn.style.borderColor = ''; btn.style.color = ''; }, 2000);
+    setTimeout(() => { btn.innerHTML = '📋 Chép'; btn.style.background = ''; btn.style.borderColor = ''; btn.style.color = ''; }, 2000);
   };
   const fb = () => {
     try {
@@ -44,7 +45,7 @@ export function copyDataJson() {
       document.body.appendChild(ta); ta.select();
       document.execCommand('copy'); document.body.removeChild(ta);
       ok();
-    } catch { alert('Không chép được.'); }
+    } catch { showToast('Không chép được', 'error'); }
   };
   if (navigator.clipboard?.writeText) navigator.clipboard.writeText(jsonStr).then(ok).catch(fb);
   else fb();
@@ -57,13 +58,6 @@ export function openPasteJsonModal()  {
 export function closePasteJsonModal() { document.getElementById('pasteJsonModal').classList.remove('active'); }
 
 // ==================== APPLY IMPORT ====================
-/**
- * v50.8.0: Áp dụng payload import với 2 chế độ:
- *   - overwrite: GHI ĐÈ (xóa hết cũ, thay bằng file)
- *   - merge:     THÊM VÀO (giữ cũ, thêm mới, skip trùng)
- *
- * EXPORT để cloud.js dùng chung.
- */
 export function applyImportedPayload(parsed, mode = 'overwrite') {
   let importedData = null, importedSettings = null;
   if (parsed?.data && (parsed.data.delivery || parsed.data.pickup || parsed.data.return)) {
@@ -72,7 +66,6 @@ export function applyImportedPayload(parsed, mode = 'overwrite') {
     importedData = parsed;
   } else return { success: false };
 
-  // Chuẩn hóa dữ liệu từ file
   const newDel  = dedupeList(importedData.delivery || []);
   const newPick = dedupeList(importedData.pickup   || []);
   const newRet  = dedupeList(importedData.return   || []);
@@ -81,7 +74,6 @@ export function applyImportedPayload(parsed, mode = 'overwrite') {
   let addedCount = 0;
 
   if (mode === 'overwrite') {
-    // === GHI ĐÈ ===
     const oldTotal = totalRecords(state.appData);
     state.appData = {
       delivery: newDel,
@@ -92,13 +84,12 @@ export function applyImportedPayload(parsed, mode = 'overwrite') {
     removedCount = 0;
     console.log(`[Import] OVERWRITE: ${oldTotal} → ${addedCount} bản ghi`);
   } else {
-    // === MERGE (THÊM VÀO) ===
     const mergeList = (oldList, newList) => {
       const merged = [...oldList];
       let added = 0;
       newList.forEach(r => {
         const dup = oldList.find(o => o.date === r.date && weightsEqual(o.weights, r.weights));
-        if (dup) return; // Skip trùng
+        if (dup) return;
         merged.push(r);
         added++;
       });
@@ -138,7 +129,7 @@ export function applyImportedPayload(parsed, mode = 'overwrite') {
       document.documentElement.setAttribute('data-theme', importedSettings.theme);
     }
 
-    // ===== v50.4: salaryByMonth =====
+    // salaryByMonth
     if (importedSettings.salaryByMonth && typeof importedSettings.salaryByMonth === 'object') {
       if (mode === 'overwrite') {
         state.salaryByMonth = importedSettings.salaryByMonth;
@@ -151,7 +142,6 @@ export function applyImportedPayload(parsed, mode = 'overwrite') {
       }
       persistSalaryByMonth();
     } else {
-      // Legacy: manualSalary + manualPoints
       const legacySalary = Number(importedSettings.manualSalary) || 0;
       const legacyBuuCuc = importedSettings.manualPoints?.buuCuc || 0;
       const legacyTaiXe  = importedSettings.manualPoints?.taiXe  || 0;
@@ -164,7 +154,7 @@ export function applyImportedPayload(parsed, mode = 'overwrite') {
       }
     }
 
-    // ===== v50.8.0: rankByMonth =====
+    // rankByMonth
     if (importedSettings.rankByMonth && typeof importedSettings.rankByMonth === 'object') {
       if (mode === 'overwrite') {
         state.rankByMonth = importedSettings.rankByMonth;
@@ -177,7 +167,6 @@ export function applyImportedPayload(parsed, mode = 'overwrite') {
       }
       persistRankByMonth();
     } else if (typeof importedSettings.rankName === 'string' && importedSettings.rankName !== 'none') {
-      // Legacy: rankName + rankBonus (global)
       const m = state.currentMonth || new Date().toISOString().slice(0, 7);
       if (!state.rankByMonth[m]) {
         state.rankByMonth[m] = {
@@ -199,42 +188,47 @@ export function applyImportedPayload(parsed, mode = 'overwrite') {
 }
 
 /**
- * v50.8.2: Kiểm tra app đang có dữ liệu → hỏi user muốn GHI ĐÈ hay THÊM VÀO.
- * EXPORT để cloud.js dùng chung.
- * @param {number} newCount - Số bản ghi chuẩn bị nạp (để hiển thị cho user)
- * @returns {Promise<string>} 'overwrite' | 'merge'
+ * Hỏi user muốn GHI ĐÈ hay THÊM VÀO khi import
+ * @returns {Promise<'overwrite'|'merge'|'cancel'>}
  */
-export function askImportMode(newCount = 0) {
+export async function askImportMode(newCount = 0) {
   const currentTotal = totalRecords(state.appData);
-  if (currentTotal === 0) return Promise.resolve('overwrite'); // App trống → ghi đè
+  if (currentTotal === 0) return 'overwrite';
 
   const newInfo = newCount > 0 ? `\n📁 File muốn nạp: ${newCount} bản ghi\n` : '';
   const msg =
-    `⚠️ App đang có ${currentTotal} bản ghi.` + newInfo + `\n` +
-    `Bạn muốn:\n\n` +
-    `• OK → GHI ĐÈ\n` +
-    `  Xóa hết data cũ, thay bằng dữ liệu mới\n\n` +
-    `• Cancel → THÊM VÀO\n` +
-    `  Giữ data cũ + thêm mới (bỏ qua bản ghi trùng)`;
+    `App đang có ${currentTotal} bản ghi.` + newInfo + `\n` +
+    `Chọn cách nạp:\n\n` +
+    `• GHI ĐÈ — Xóa hết data cũ, thay bằng dữ liệu mới\n` +
+    `• THÊM VÀO — Giữ data cũ + thêm mới (bỏ qua bản ghi trùng)`;
 
-  const ok = window.confirm(msg);
-  return Promise.resolve(ok ? 'overwrite' : 'merge');
+  // Dùng confirm với 2 lựa chọn: OK = ghi đè, Cancel = hỏi tiếp THÊM VÀO hay hủy
+  const ok = await showConfirm(msg, {
+    title: 'Nạp dữ liệu',
+    okText: 'GHI ĐÈ',
+    cancelText: 'THÊM VÀO',
+    danger: true
+  });
+
+  return ok ? 'overwrite' : 'merge';
 }
 
 // ==================== IMPORT (paste JSON) ====================
 export async function confirmImportJsonString() {
   const text = document.getElementById('jsonPasteInput').value.trim();
-  if (!text) { alert('Vui lòng dán chuỗi JSON!'); return; }
+  if (!text) {
+    await showAlert('Vui lòng dán chuỗi JSON!', { title: 'Thiếu dữ liệu', okText: 'Đóng' });
+    return;
+  }
 
   let parsed;
   try {
     parsed = JSON.parse(text);
   } catch {
-    alert('Dữ liệu JSON không hợp lệ!');
+    await showAlert('Dữ liệu JSON không hợp lệ!', { title: 'Lỗi định dạng', okText: 'Đóng' });
     return;
   }
 
-  // v50.8.2: đếm số bản ghi sắp nạp để hiển thị
   const newCount = (parsed.data?.delivery?.length || 0)
                  + (parsed.data?.pickup?.length   || 0)
                  + (parsed.data?.return?.length   || 0);
@@ -243,7 +237,7 @@ export async function confirmImportJsonString() {
 
   const result = applyImportedPayload(parsed, mode);
   if (!result.success) {
-    alert('Chuỗi JSON không đúng định dạng!');
+    await showAlert('Chuỗi JSON không đúng định dạng!', { title: 'Lỗi định dạng', okText: 'Đóng' });
     return;
   }
 
@@ -253,10 +247,10 @@ export async function confirmImportJsonString() {
   closePasteJsonModal();
 
   const msg = mode === 'overwrite'
-    ? `✅ Đã GHI ĐÈ: ${result.addedCount} bản ghi mới`
-    : `✅ Đã THÊM VÀO: +${result.addedCount} bản ghi` +
-      (result.removedCount > 0 ? `\n🧹 Bỏ qua ${result.removedCount} bản ghi trùng` : '');
-  alert(msg);
+    ? `Đã GHI ĐÈ: ${result.addedCount} bản ghi mới`
+    : `Đã THÊM VÀO: +${result.addedCount} bản ghi` +
+      (result.removedCount > 0 ? `\nBỏ qua ${result.removedCount} bản ghi trùng` : '');
+  await showAlert(msg, { title: '✅ Hoàn tất', okText: 'OK' });
 }
 
 // ==================== EXPORT ====================
@@ -265,7 +259,6 @@ export function exportData() {
     version: APP_VERSION,
     exportedAt: new Date().toISOString(),
     settings: {
-      // v50.8.0
       rankByMonth:   state.rankByMonth,
       salaryByMonth: state.salaryByMonth,
       salaryDays:    state.salaryDays,
@@ -292,12 +285,11 @@ export async function importData(event) {
     try {
       parsed = JSON.parse(e.target.result);
     } catch {
-      alert('Không đọc được file sao lưu!');
+      await showAlert('Không đọc được file sao lưu!', { title: 'Lỗi file', okText: 'Đóng' });
       event.target.value = '';
       return;
     }
 
-    // v50.8.2: đếm số bản ghi sắp nạp
     const newCount = (parsed.data?.delivery?.length || 0)
                    + (parsed.data?.pickup?.length   || 0)
                    + (parsed.data?.return?.length   || 0);
@@ -306,7 +298,7 @@ export async function importData(event) {
 
     const result = applyImportedPayload(parsed, mode);
     if (!result.success) {
-      alert('File sao lưu không đúng định dạng!');
+      await showAlert('File sao lưu không đúng định dạng!', { title: 'Lỗi file', okText: 'Đóng' });
       event.target.value = '';
       return;
     }
@@ -316,26 +308,39 @@ export async function importData(event) {
     initRegionUI();
 
     const msg = mode === 'overwrite'
-      ? `✅ Đã GHI ĐÈ: ${result.addedCount} bản ghi mới`
-      : `✅ Đã THÊM VÀO: +${result.addedCount} bản ghi` +
-        (result.removedCount > 0 ? `\n🧹 Bỏ qua ${result.removedCount} bản ghi trùng` : '');
-    alert(msg);
+      ? `Đã GHI ĐÈ: ${result.addedCount} bản ghi mới`
+      : `Đã THÊM VÀO: +${result.addedCount} bản ghi` +
+        (result.removedCount > 0 ? `\nBỏ qua ${result.removedCount} bản ghi trùng` : '');
+    await showAlert(msg, { title: '✅ Hoàn tất', okText: 'OK' });
   };
   reader.readAsText(file);
   event.target.value = '';
 }
 
 // ==================== RESTORE FROM VAULT ====================
-export function restoreFromVault() {
-  const vault = JSON.parse(localStorage.getItem(STORAGE_KEYS.vault));
+export async function restoreFromVault() {
+  let vault = null;
+  try {
+    vault = JSON.parse(localStorage.getItem(STORAGE_KEYS.vault));
+  } catch {}
+
   const hasData = vault && (
     (vault.delivery && vault.delivery.length > 0) ||
     (vault.pickup   && vault.pickup.length   > 0) ||
     (vault.return   && vault.return.length   > 0)
   );
-  if (!hasData) { alert('Không tìm thấy dữ liệu tự động lưu trữ.'); return; }
-  if (!confirm('Đã tìm thấy bản sao lưu tự động. Bạn có muốn phục hồi không?')) return;
+  if (!hasData) {
+    await showAlert('Không tìm thấy dữ liệu tự động lưu trữ.', { title: 'Không có vault', okText: 'Đóng' });
+    return;
+  }
+
+  const ok = await showConfirm(
+    'Đã tìm thấy bản sao lưu tự động.\n\nBạn có muốn phục hồi không?',
+    { title: 'Phục hồi vault', okText: 'Phục hồi', cancelText: 'Hủy' }
+  );
+  if (!ok) return;
+
   state.appData = vault;
   updateAllViews();
-  alert('Đã phục hồi dữ liệu!');
+  await showAlert('Đã phục hồi dữ liệu!', { title: '✅ Hoàn tất', okText: 'OK' });
 }
