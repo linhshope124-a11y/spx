@@ -17,7 +17,8 @@ const CORE = [
   './js/entry.js',
   './js/backup.js',
   './js/cloud.js',
-  './js/undo.js'
+  './js/undo.js',
+  './js/dialog.js'
 ];
 
 self.addEventListener('install', e => {
