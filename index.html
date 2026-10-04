@@ -50,6 +50,20 @@
 <div class="layout-shell">
   <div class="content-area">
 
+    <!-- ===== BANNER NHẮC QUÉT (v50.9.0) ===== -->
+    <div id="reminderBanner" class="reminder-banner" style="display:none">
+      <div class="reminder-banner-head">
+        <span class="reminder-banner-icon" id="reminderIcon">⚠️</span>
+        <span class="reminder-banner-title" id="reminderTitle">Chưa quét sản lượng</span>
+        <button class="reminder-banner-close" onclick="dismissReminderBanner()" aria-label="Đóng">✕</button>
+      </div>
+      <div class="reminder-banner-sub" id="reminderSub"></div>
+      <div class="reminder-banner-actions">
+        <button class="reminder-btn-secondary" id="reminderSecondaryBtn" onclick="openHistoryTab()" style="display:none">Xem chi tiết</button>
+        <button class="reminder-btn-primary" onclick="document.getElementById('ocrFileInput').click()">📷 Quét ngay</button>
+      </div>
+    </div>
+
     <!-- ===== TAB TỔNG QUAN ===== -->
     <div class="tab-panel active" id="tab-overview">
       <main class="app-container">
@@ -377,6 +391,7 @@
             <button class="filter-btn" onclick="setHistFilter('delivery', this)">Giao</button>
             <button class="filter-btn" onclick="setHistFilter('pickup', this)">Lấy</button>
             <button class="filter-btn" onclick="setHistFilter('return', this)">Hoàn</button>
+            <button class="filter-btn filter-btn-date" id="histDateChip" onclick="openHistoryDatePicker()">📅 Ngày</button>
           </div>
           <div id="historyEntries"></div>
         </section>
@@ -440,6 +455,7 @@
 </aside>
 
 <input type="file" id="ocrFileInput" accept="image/*" multiple style="display:none;" onchange="handleOcrImage(event)">
+<input type="date" id="historyDatePickerInput" style="display:none" onchange="applyHistoryDateFilter(this.value)">
 
 <!-- ============ MENU MODAL ============ -->
 <div class="modal-shade" id="menuModal" onclick="if(event.target===this)closeMenuModal()">
