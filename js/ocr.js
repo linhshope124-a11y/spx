@@ -3,9 +3,9 @@ import { WEIGHT_KEYS } from './config.js';
 import { getTodayIso, formatDateDisplay, generateId } from './utils.js';
 import { openAddModal, openEditModal, switchModalSubTab, showToast } from './ui.js';
 import { updateAllViews } from './render.js';
+import { showAlert } from './dialog.js';
 
-// ==================== UNDO LOADER (v50.8.3-fix) ====================
-// Dynamic import tránh circular dependency + fallback an toàn
+// ==================== UNDO LOADER ====================
 let _pushUndoFn = null;
 let _pushUndoLoading = null;
 
@@ -495,7 +495,7 @@ function validateDistribution(weights) {
   return { ok: warnings.length === 0, warnings, suspectKeys: [...suspects] };
 }
 
-// ==================== v50.8.3-fix: AUTO-SAVE + UNDO ====================
+// ==================== AUTO-SAVE + UNDO ====================
 async function tryAutoSave(r) {
   const confs = Object.values(r.confidences).filter(c => c != null);
   if (confs.length === 0) return false;
@@ -512,7 +512,6 @@ async function tryAutoSave(r) {
   const weights = buildWeights(r);
   const newId = generateId();
 
-  // Dynamic import pushUndo (an toàn — nếu lỗi thì bỏ qua, không crash)
   const pushUndoFn = await ensurePushUndo();
   if (pushUndoFn) {
     pushUndoFn({
@@ -837,13 +836,13 @@ function buildCompareText(ocrW, existingW) {
   };
 }
 
-export function openCompareModal(batchItem, existingRecord) {
+export async function openCompareModal(batchItem, existingRecord) {
   const r = batchItem.result;
   const type = getTypeFromResult(r);
 
   openEditModal(type, existingRecord.id);
 
-  setTimeout(() => {
+  setTimeout(async () => {
     const previewBox = document.getElementById('ocrPreviewBox');
     const previewImg = document.getElementById('ocrPreviewImg');
     if (previewBox && previewImg && r.fullDataUrl) {
@@ -856,7 +855,7 @@ export function openCompareModal(batchItem, existingRecord) {
     msg += `📁 Dữ liệu ĐÃ LƯU được hiển thị trong ô nhập.\n`;
     msg += `📷 Ảnh OCR được hiển thị bên dưới.\n\n`;
     msg += cmp.text;
-    alert(msg);
+    await showAlert(msg, { title: 'So sánh OCR', okText: 'Đã hiểu' });
   }, 200);
 }
 
@@ -972,7 +971,7 @@ export function showBackToBatchBtn(show) {
 }
 export function hasBatchPending() { return batchResults.length > 0; }
 
-// ==================== SAVE BATCH (v50.8.3-fix) ====================
+// ==================== SAVE BATCH ====================
 export async function saveBatchAll() {
   const valid = batchResults.filter(r => !r.error);
   if (valid.length === 0) { showToast('Không có dữ liệu hợp lệ', 'error'); return; }
@@ -1012,7 +1011,6 @@ export async function saveBatchAll() {
     return;
   }
 
-  // Thêm records + gom id
   const addedIds = [];
   finalList.forEach(({ item, type, weights }) => {
     const id = generateId();
@@ -1020,7 +1018,6 @@ export async function saveBatchAll() {
     addedIds.push({ type, id });
   });
 
-  // Dynamic import pushUndo — an toàn
   if (addedIds.length > 0) {
     const pushUndoFn = await ensurePushUndo();
     if (pushUndoFn) {
