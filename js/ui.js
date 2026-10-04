@@ -2,6 +2,7 @@ import { state, persistSettings, persistPeriodState, getRankConfig, setRankConfi
 import { updateAllViews, renderHistory } from './render.js';
 import { getTodayIso, getCurrentMonthIso } from './utils.js';
 import { toggleTheme } from './theme.js';
+import { showConfirm } from './dialog.js';
 
 // ================ HELPERS ================
 function formatDateLabel(isoDate) {
@@ -85,7 +86,6 @@ export function setHistFilter(filter, btn) {
 
 // ================ PERIOD BAR ================
 export function setPeriodMode(mode, el) {
-  // Chỉ chấp nhận 'month' — toggle Ngày đã bỏ từ v50
   if (mode !== 'month') return;
   if (state.periodMode === mode) return;
 
@@ -121,7 +121,6 @@ export function periodNext() {
 }
 
 export function openPeriodPicker() {
-  // v50.8.5: bỏ qua nếu vừa long-press label thành công
   if (window.__periodLongPressFired) {
     window.__periodLongPressFired = false;
     return;
@@ -199,7 +198,7 @@ export function updatePeriodBarUI() {
   }
 }
 
-// ================ v50.8.5: LONG-PRESS LABEL → NHẢY MỚI NHẤT ================
+// ================ LONG-PRESS LABEL → NHẢY MỚI NHẤT ================
 let _periodLongPressAttached = false;
 function attachPeriodLabelLongPress() {
   if (_periodLongPressAttached) return;
@@ -218,7 +217,6 @@ function attachPeriodLabelLongPress() {
       if (navigator.vibrate) { try { navigator.vibrate(30); } catch {} }
       goToLatest();
       label.classList.remove('long-pressing');
-      // Reset cờ sau 350ms để click tiếp theo hoạt động bình thường
       setTimeout(() => { window.__periodLongPressFired = false; }, 350);
     }, 550);
   };
@@ -407,7 +405,7 @@ export function openEditModal(type, id) {
   document.getElementById('entryModal').classList.add('active');
 }
 
-export function closeModal(force) {
+export async function closeModal(force) {
   if (!force) {
     const hasData = ['del_inp','pick_inp','ret_inp'].some(pfx =>
       ['0_2','2_4','4_6','6_8','8_10','10_12','12_15','over_15'].some(sfx => {
@@ -416,7 +414,18 @@ export function closeModal(force) {
       })
     );
     const isEditing = document.getElementById('editEntryId').value !== '';
-    if (hasData && !isEditing && !confirm('Bạn đang có dữ liệu chưa lưu. Đóng và bỏ qua?')) return;
+    if (hasData && !isEditing) {
+      const ok = await showConfirm(
+        'Bạn đang có dữ liệu chưa lưu.\n\nĐóng và bỏ qua?',
+        {
+          title: 'Dữ liệu chưa lưu',
+          okText: 'Bỏ qua',
+          cancelText: 'Ở lại',
+          danger: true
+        }
+      );
+      if (!ok) return;
+    }
   }
   document.getElementById('entryModal').classList.remove('active');
   state.isOcrScan = false;
