@@ -3,7 +3,7 @@ import { WEIGHT_KEYS } from './config.js';
 import { getTodayIso, formatDateDisplay, generateId } from './utils.js';
 import { openAddModal, openEditModal, switchModalSubTab, showToast } from './ui.js';
 import { updateAllViews } from './render.js';
-import { showAlert } from './dialog.js';
+import { showAlert, showConfirm } from './dialog.js';
 
 // ==================== UNDO LOADER ====================
 let _pushUndoFn = null;
@@ -385,33 +385,225 @@ function extractDate(text) {
   return getTodayIso();
 }
 
-// ==================== CACHE ====================
-const ocrCache = new Map();
-const OCR_CACHE_MAX = 30;
+// ==================== v50.8.8: CACHE 2 TẦNG ====================
+const ocrCache = new Map();                     // Tầng 1: RAM
+const OCR_CACHE_MAX = 200;                      // Số entry tối đa
+const LS_CACHE_PREFIX = 'spx_ocr_cache_';       // Prefix localStorage
+const LS_CACHE_INDEX = 'spx_ocr_cache_index';   // Key lưu thứ tự (FIFO)
+const LS_CACHE_MAX_BYTES = 4 * 1024 * 1024;     // 4MB — ngưỡng tự dọn
 
-async function hashBlob(file) {
+// Đọc index FIFO từ localStorage
+function readCacheIndex() {
   try {
-    const buf = await file.arrayBuffer();
-    const hashBuf = await crypto.subtle.digest('SHA-1', buf);
-    return Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2, '0')).join('');
+    const raw = localStorage.getItem(LS_CACHE_INDEX);
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr : [];
   } catch {
-    return 'fb_' + Date.now().toString(16) + '_' + file.size + '_' + (file.name || '').length;
+    return [];
   }
 }
 
-function cacheGet(hash) {
-  if (!ocrCache.has(hash)) return null;
-  const v = ocrCache.get(hash);
-  ocrCache.delete(hash);
-  ocrCache.set(hash, v);
-  return v;
-}
-function cacheSet(hash, value) {
-  ocrCache.set(hash, value);
-  if (ocrCache.size > OCR_CACHE_MAX) {
-    const oldest = ocrCache.keys().next().value;
-    ocrCache.delete(oldest);
+// Ghi index FIFO
+function writeCacheIndex(index) {
+  try {
+    localStorage.setItem(LS_CACHE_INDEX, JSON.stringify(index));
+  } catch (e) {
+    console.warn('[OCR Cache] Ghi index thất bại:', e.message);
   }
+}
+
+// Ước lượng dung lượng localStorage đã dùng (bytes)
+function estimateLocalStorageBytes() {
+  try {
+    let total = 0;
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key || !key.startsWith(LS_CACHE_PREFIX)) continue;
+      const val = localStorage.getItem(key);
+      if (val) total += key.length + val.length;
+    }
+    return total * 2;  // UTF-16 → 2 bytes/char
+  } catch {
+    return 0;
+  }
+}
+
+// Dọn cache cũ nhất — xóa 1 entry
+function evictOldestCache() {
+  const index = readCacheIndex();
+  if (index.length === 0) return false;
+  const oldest = index.shift();
+  try {
+    localStorage.removeItem(LS_CACHE_PREFIX + oldest);
+  } catch {}
+  writeCacheIndex(index);
+  ocrCache.delete(oldest);
+  return true;
+}
+
+// Dọn đến khi dưới ngưỡng an toàn
+function pruneCacheIfNeeded() {
+  // 1. Nếu số entry vượt max → xóa đến khi = 80% max
+  const index = readCacheIndex();
+  const targetCount = Math.floor(OCR_CACHE_MAX * 0.8);
+  let removedCount = 0;
+  while (index.length > targetCount) {
+    const oldest = index.shift();
+    try { localStorage.removeItem(LS_CACHE_PREFIX + oldest); } catch {}
+    ocrCache.delete(oldest);
+    removedCount++;
+  }
+  if (removedCount > 0) writeCacheIndex(index);
+
+  // 2. Nếu dung lượng vượt ngưỡng → xóa đến khi còn 50% ngưỡng
+  let bytes = estimateLocalStorageBytes();
+  const targetBytes = LS_CACHE_MAX_BYTES * 0.5;
+  let safety = 100;  // tránh vòng lặp vô hạn
+  while (bytes > targetBytes && safety-- > 0) {
+    if (!evictOldestCache()) break;
+    bytes = estimateLocalStorageBytes();
+  }
+
+  if (removedCount > 0 || bytes < LS_CACHE_MAX_BYTES) {
+    console.log(`[OCR Cache] Prune: xóa ${removedCount} entry, còn ~${Math.round(bytes / 1024)}KB`);
+  }
+}
+
+// Lấy cache (2 tầng)
+function cacheGet(hash) {
+  // 1. Thử RAM trước
+  if (ocrCache.has(hash)) {
+    const v = ocrCache.get(hash);
+    // Di chuyển lên cuối index FIFO
+    const index = readCacheIndex();
+    const idx = index.indexOf(hash);
+    if (idx !== -1) {
+      index.splice(idx, 1);
+      index.push(hash);
+      writeCacheIndex(index);
+    }
+    return v;
+  }
+
+  // 2. Thử localStorage
+  try {
+    const raw = localStorage.getItem(LS_CACHE_PREFIX + hash);
+    if (raw) {
+      const value = JSON.parse(raw);
+      ocrCache.set(hash, value);  // warm RAM
+
+      // Cập nhật FIFO
+      const index = readCacheIndex();
+      const idx = index.indexOf(hash);
+      if (idx !== -1) {
+        index.splice(idx, 1);
+        index.push(hash);
+        writeCacheIndex(index);
+      }
+      return value;
+    }
+  } catch (e) {
+    console.warn('[OCR Cache] Đọc localStorage lỗi:', e.message);
+  }
+
+  return null;
+}
+
+// Ghi cache (2 tầng)
+function cacheSet(hash, value) {
+  // Ghi RAM
+  ocrCache.set(hash, value);
+
+  // Ghi localStorage
+  try {
+    localStorage.setItem(LS_CACHE_PREFIX + hash, JSON.stringify(value));
+
+    // Cập nhật index FIFO
+    const index = readCacheIndex();
+    if (!index.includes(hash)) {
+      index.push(hash);
+      writeCacheIndex(index);
+    }
+
+    // Dọn nếu cần
+    pruneCacheIfNeeded();
+  } catch (e) {
+    // Có thể quota exceeded → dọn bớt rồi thử lại 1 lần
+    console.warn('[OCR Cache] Ghi localStorage lỗi:', e.message);
+    try {
+      pruneCacheIfNeeded();
+      localStorage.setItem(LS_CACHE_PREFIX + hash, JSON.stringify(value));
+    } catch (e2) {
+      console.warn('[OCR Cache] Vẫn không ghi được:', e2.message);
+    }
+  }
+}
+
+// ==================== v50.8.8: XÓA CACHE OCR (user) ====================
+export async function clearOcrCache() {
+  const ok = await showConfirm(
+    'Xóa toàn bộ cache OCR?\n\n' +
+    'Lần sau quét lại ảnh cũ sẽ phải OCR từ đầu (chậm hơn).\n' +
+    'Dữ liệu sản lượng đã lưu vẫn giữ nguyên.',
+    {
+      title: '🗑️ Xóa cache OCR',
+      okText: 'Xóa cache',
+      cancelText: 'Hủy',
+      danger: true
+    }
+  );
+  if (!ok) return 0;
+
+  let count = 0;
+
+  // Xóa RAM
+  ocrCache.clear();
+
+  // Xóa localStorage
+  try {
+    const index = readCacheIndex();
+    count = index.length;
+    index.forEach(hash => {
+      try { localStorage.removeItem(LS_CACHE_PREFIX + hash); } catch {}
+    });
+    localStorage.removeItem(LS_CACHE_INDEX);
+  } catch (e) {
+    console.warn('[OCR Cache] Xóa lỗi:', e.message);
+  }
+
+  // Đếm lại chính xác (phòng trường hợp index thiếu)
+  try {
+    let actualCount = 0;
+    const toRemove = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith(LS_CACHE_PREFIX)) {
+        toRemove.push(key);
+        actualCount++;
+      }
+    }
+    toRemove.forEach(k => { try { localStorage.removeItem(k); } catch {} });
+    count = Math.max(count, actualCount);
+  } catch {}
+
+  showToast(`Đã xóa ${count} cache OCR`, 'success', 2500);
+  return count;
+}
+
+// ==================== v50.8.8: THỐNG KÊ CACHE (debug) ====================
+export function getOcrCacheStats() {
+  const index = readCacheIndex();
+  const ramCount = ocrCache.size;
+  const lsCount = index.length;
+  const bytes = estimateLocalStorageBytes();
+  return {
+    ramEntries: ramCount,
+    lsEntries: lsCount,
+    sizeKB: Math.round(bytes / 1024),
+    maxEntries: OCR_CACHE_MAX,
+    maxSizeKB: Math.round(LS_CACHE_MAX_BYTES / 1024)
+  };
 }
 
 // ==================== BATCH STATE ====================
@@ -601,7 +793,7 @@ export async function handleOcrImage(event) {
         );
         return;
       }
-      // v50.8.7: bỏ toast khi auto-save 1 ảnh (banner undo đã hiển thị)
+      // Bỏ toast khi auto-save 1 ảnh (banner undo đã hiển thị)
       return;
     }
 
@@ -729,7 +921,6 @@ export function fillModalFromResult(batchItem) {
   if (debugEl) {
     const modeStr = r.mode ? `[mode: ${r.mode}]` : '';
     debugEl.innerText = `${modeStr}\n\n${r.rawText || '(không có text)'}`;
-    // v50.8.7: reset trạng thái ẩn + nhãn nút "Xem log"
     debugEl.style.display = 'none';
     const toggleBtn = document.getElementById('ocrDebugToggle');
     if (toggleBtn) toggleBtn.innerText = 'Xem log';
