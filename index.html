@@ -175,7 +175,7 @@
               <span class="income-summary-title">
                 Thu nhập
                 <button class="info-icon" type="button"
-                        onclick="event.preventDefault(); event.stopPropagation(); alert('Cách tính thu nhập:\n\nLương 1 công = (LCB + Bưu cục + Tài xế) / số ngày tối đa\n\nĐã tích lũy = Lương 1 công × số công\n\nQuy đổi: Giao + Lấy/6 + Hoàn\n• Miền: ≥60 = 1 công, ≥30 = 0.5 công\n• TP.HCM & HN: ≥80 = 1 công, ≥40 = 0.5 công\n\n⚡ Lương được lưu RIÊNG theo từng tháng.\nChuyển tháng để cấu hình tháng đó.')"
+                        onclick="event.preventDefault(); event.stopPropagation(); showIncomeInfo()"
                         aria-label="Trợ giúp">i</button>
               </span>
               <div class="income-days-wrap">
@@ -837,6 +837,21 @@
   <span class="update-banner-icon">🎉</span>
   <span id="updateBannerMsg" class="update-banner-msg">Có bản mới!</span>
   <button class="update-banner-btn" onclick="applyUpdate()">Cập nhật</button>
+</div>
+
+<!-- ============ DIALOG MODAL (thay alert/confirm) ============ -->
+<div class="modal-shade dialog-shade" id="dialogModal">
+  <div class="dialog-box">
+    <div class="dialog-icon-wrap">
+      <span class="dialog-icon" id="dialogIcon">ℹ️</span>
+    </div>
+    <h3 class="dialog-title" id="dialogTitle">Thông báo</h3>
+    <div class="dialog-message" id="dialogMessage"></div>
+    <div class="dialog-actions">
+      <button class="dialog-btn dialog-btn-cancel" id="dialogCancelBtn" onclick="dialogCancel()">Hủy</button>
+      <button class="btn btn-primary dialog-btn-ok" id="dialogOkBtn" onclick="dialogOk()">OK</button>
+    </div>
+  </div>
 </div>
 
 <script type="module" src="./js/main.js"></script>
