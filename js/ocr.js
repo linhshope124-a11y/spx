@@ -601,12 +601,7 @@ export async function handleOcrImage(event) {
         );
         return;
       }
-      if (autoSaved.length === 1) {
-        showToast(
-          `Đã tự động lưu ${getTypeLabel(r)} ${formatDateDisplay(r.parsedDate)}: ${r.totalFound} đơn`,
-          'success', 2500
-        );
-      }
+      // v50.8.7: bỏ toast khi auto-save 1 ảnh (banner undo đã hiển thị)
       return;
     }
 
@@ -734,6 +729,10 @@ export function fillModalFromResult(batchItem) {
   if (debugEl) {
     const modeStr = r.mode ? `[mode: ${r.mode}]` : '';
     debugEl.innerText = `${modeStr}\n\n${r.rawText || '(không có text)'}`;
+    // v50.8.7: reset trạng thái ẩn + nhãn nút "Xem log"
+    debugEl.style.display = 'none';
+    const toggleBtn = document.getElementById('ocrDebugToggle');
+    if (toggleBtn) toggleBtn.innerText = 'Xem log';
   }
 
   openAddModal();
