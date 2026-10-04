@@ -1,3 +1,5 @@
+import { showAlert } from './dialog.js';
+
 const undoStack = [];
 const MAX_UNDO = 5;
 let undoTimer = null;
@@ -18,7 +20,10 @@ export async function undoLast() {
     updateAllViews();
   } catch (e) {
     console.error('Undo failed:', e);
-    alert('Không thể hoàn tác: ' + e.message);
+    await showAlert('Không thể hoàn tác: ' + e.message, {
+      title: 'Lỗi hoàn tác',
+      okText: 'Đóng'
+    });
   }
 }
 
