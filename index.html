@@ -34,9 +34,10 @@
         <button class="period-arrow-btn" id="periodNext" onclick="periodNext()" aria-label="Tháng sau">›</button>
       </div>
 
-      <button class="header-icon-btn" onclick="goToLatest()" aria-label="Mới nhất" title="Mới nhất">
+      <button class="header-icon-btn" onclick="openHistoryTab()" aria-label="Nhật ký" title="Nhật ký · Giữ label Tháng để nhảy mới nhất">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="12" cy="12" r="9"/>
+          <polyline points="1 4 1 10 7 10"/>
+          <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
           <polyline points="12 7 12 12 15 15"/>
         </svg>
       </button>
@@ -384,6 +385,7 @@
 
   </div>
 </div>
+
 <!-- ============ BOTTOM NAV ============ -->
 <aside class="bottom-nav">
   <button class="nav-btn active" data-tab="overview" onclick="switchMainTab('overview', this)" aria-label="Tổng quan">
@@ -675,7 +677,6 @@
       <label class="settings-label">GitHub Token</label>
       <input type="password" id="ghTokenInput" class="input-control" placeholder="ghp_... (dán token mới)" style="font-family:'JetBrains Mono',monospace;font-size:12px">
 
-      <!-- v50.8.2: Token status + nút xóa -->
       <div class="token-status-wrap" id="tokenStatusWrap" style="display:none">
         <span class="token-saved-label" id="tokenSavedLabel">✅ Đã lưu token</span>
         <button type="button" class="token-clear-btn" id="clearTokenBtn" onclick="clearCloudToken()">
