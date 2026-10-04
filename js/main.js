@@ -22,7 +22,8 @@ import {
   openOcrLightbox, closeOcrLightbox,
   openBatchOcrModal, closeBatchOcrModal, appendBatchFiles,
   saveBatchAll, importBatchItem, removeBatchItem,
-  backToBatch, hasBatchPending, showBackToBatchBtn
+  backToBatch, hasBatchPending, showBackToBatchBtn,
+  clearOcrCache, getOcrCacheStats
 } from './ocr.js';
 import { saveRecord, deleteRecord, clearAllHistory } from './entry.js';
 import {
@@ -116,6 +117,28 @@ async function _cleanupDuplicates() {
   });
   updateAllViews();
   await showAlert(`Đã xóa ${dups.length} bản ghi trùng lặp!`, { title: 'Hoàn tất', okText: 'OK' });
+}
+
+// ================ v50.8.8: OCR CACHE STATS + CLEAR ================
+function _updateOcrCacheStats() {
+  const el = document.getElementById('ocrCacheStats');
+  if (!el) return;
+  try {
+    const stats = getOcrCacheStats();
+    el.innerText = `RAM: ${stats.ramEntries} · LS: ${stats.lsEntries} · ~${stats.sizeKB} KB (max ${stats.maxEntries}/${stats.maxSizeKB}KB)`;
+  } catch (e) {
+    el.innerText = 'Không đọc được thống kê';
+  }
+}
+
+async function _clearOcrCacheFromSettings() {
+  try {
+    await clearOcrCache();
+    _updateOcrCacheStats();
+  } catch (e) {
+    console.error('[OCR Cache] Lỗi xóa:', e);
+    await showAlert('Không xóa được cache: ' + e.message, { title: 'Lỗi', okText: 'Đóng' });
+  }
 }
 
 // ================ HERO COLLAPSIBLE ================
@@ -278,8 +301,12 @@ Object.assign(window, {
   // Info icon
   showIncomeInfo: _showIncomeInfo,
 
-  // v50.8.7: Toggle OCR debug
+  // Toggle OCR debug
   toggleOcrDebugText,
+
+  // v50.8.8: OCR cache
+  clearOcrCacheFromSettings: _clearOcrCacheFromSettings,
+  updateOcrCacheStats: _updateOcrCacheStats,
 
   // REGION — inline onclick
   changeRegion: function(regionKey, el) {
@@ -356,6 +383,15 @@ Object.assign(window, {
 
   toggleHeroMetrics: _toggleHeroMetrics
 });
+
+// ================ HOOK SETTINGS MODAL → UPDATE STATS ================
+// Bọc lại openSettingsModal để cập nhật stats mỗi lần mở
+const _origOpenSettingsModal = openSettingsModal;
+window.openSettingsModal = function() {
+  _origOpenSettingsModal();
+  // Đợi DOM hiển thị xong → cập nhật stats
+  setTimeout(_updateOcrCacheStats, 100);
+};
 
 // ================ INIT ================
 (function init() {
