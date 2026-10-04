@@ -5,6 +5,7 @@ import { closeModal } from './ui.js';
 import { updateAllViews } from './render.js';
 import { hasBatchPending, backToBatch } from './ocr.js';
 import { pushUndo } from './undo.js';
+import { showAlert, showConfirm } from './dialog.js';
 
 function parseWeights(prefix) {
   const out = {};
@@ -22,10 +23,16 @@ function findDuplicate(type, date, weights) {
   return state.appData[type].find(r => r.date === date && weightsEqual(r.weights, weights));
 }
 
-export function saveRecord() {
+export async function saveRecord() {
   const date = document.getElementById('inputDate').value || getTodayIso();
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { alert('Ngày không hợp lệ!'); return; }
-  if (isNaN(new Date(date).getTime()))   { alert('Ngày không hợp lệ!'); return; }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    await showAlert('Ngày không hợp lệ!', { title: 'Lỗi', okText: 'Đóng' });
+    return;
+  }
+  if (isNaN(new Date(date).getTime())) {
+    await showAlert('Ngày không hợp lệ!', { title: 'Lỗi', okText: 'Đóng' });
+    return;
+  }
 
   const editId   = document.getElementById('editEntryId').value;
   const editType = document.getElementById('editEntryType').value;
@@ -40,8 +47,10 @@ export function saveRecord() {
     const weights = parseWeights(prefix);
     const idx = state.appData[editType].findIndex(it => it.id === numId);
     if (idx === -1) {
-      alert('Không tìm thấy bản ghi để cập nhật.');
-      closeModal(true); updateAllViews(); return;
+      await showAlert('Không tìm thấy bản ghi để cập nhật.', { title: 'Lỗi', okText: 'Đóng' });
+      closeModal(true);
+      updateAllViews();
+      return;
     }
 
     const dup = state.appData[editType].find(r =>
@@ -49,7 +58,11 @@ export function saveRecord() {
     );
     if (dup) {
       const typeLabel = editType === 'delivery' ? 'Giao' : editType === 'pickup' ? 'Lấy' : 'Hoàn';
-      alert(`🚫 Không thể lưu!\n\nBản ghi ${typeLabel} ngày ${formatDateDisplay(date)} đã tồn tại với CÙNG số liệu.\n\nHãy sửa số liệu khác hoặc xóa bản ghi cũ trước.`);
+      await showAlert(
+        `Bản ghi ${typeLabel} ngày ${formatDateDisplay(date)} đã tồn tại với CÙNG số liệu.\n\n` +
+        `Hãy sửa số liệu khác hoặc xóa bản ghi cũ trước.`,
+        { title: '🚫 Không thể lưu', okText: 'Đã hiểu' }
+      );
       return;
     }
 
@@ -72,7 +85,10 @@ export function saveRecord() {
     const delT  = Object.values(delW).reduce((a, b) => a + b, 0);
     const pickT = Object.values(pickW).reduce((a, b) => a + b, 0);
     const retT  = Object.values(retW).reduce((a, b) => a + b, 0);
-    if (delT + pickT + retT === 0) { alert('Chưa nhập số liệu nào!'); return; }
+    if (delT + pickT + retT === 0) {
+      await showAlert('Chưa nhập số liệu nào!', { title: 'Thiếu dữ liệu', okText: 'Đóng' });
+      return;
+    }
 
     const dups = [];
     if (delT  > 0 && findDuplicate('delivery', date, delW))  dups.push('Giao');
@@ -80,7 +96,11 @@ export function saveRecord() {
     if (retT  > 0 && findDuplicate('return',   date, retW))  dups.push('Hoàn');
 
     if (dups.length > 0) {
-      alert(`🚫 Không thể lưu!\n\nNgày ${formatDateDisplay(date)} đã tồn tại bản ghi ${dups.join(', ')} với CÙNG số liệu.\n\nHãy:\n• Sửa số liệu khác\n• Hoặc xóa bản ghi cũ trước`);
+      await showAlert(
+        `Ngày ${formatDateDisplay(date)} đã tồn tại bản ghi ${dups.join(', ')} với CÙNG số liệu.\n\n` +
+        `Hãy:\n• Sửa số liệu khác\n• Hoặc xóa bản ghi cũ trước`,
+        { title: '🚫 Không thể lưu', okText: 'Đã hiểu' }
+      );
       return;
     }
 
@@ -119,11 +139,18 @@ export function saveRecord() {
   }
 }
 
-export function deleteRecord(type, id) {
+export async function deleteRecord(type, id) {
   const arr = state.appData[type];
   const idx = arr.findIndex(it => it.id === id);
   if (idx === -1) return;
-  if (!confirm('Bạn muốn xóa bản ghi này?')) return;
+
+  const ok = await showConfirm('Bạn muốn xóa bản ghi này?', {
+    title: 'Xóa bản ghi',
+    okText: 'Xóa',
+    cancelText: 'Hủy',
+    danger: true
+  });
+  if (!ok) return;
 
   const removed = deepClone(arr[idx]);
   const typeLabel = type === 'delivery' ? 'Giao' : type === 'pickup' ? 'Lấy' : 'Hoàn';
@@ -139,10 +166,20 @@ export function deleteRecord(type, id) {
   updateAllViews();
 }
 
-export function clearAllHistory() {
+export async function clearAllHistory() {
   const total = state.appData.delivery.length + state.appData.pickup.length + state.appData.return.length;
   if (total === 0) return;
-  if (!confirm('Bạn chắc chắn muốn xóa toàn bộ lịch sử?\nBản sao lưu tự động cũng sẽ bị xóa.')) return;
+
+  const ok = await showConfirm(
+    `Bạn chắc chắn muốn xóa toàn bộ ${total} bản ghi?\n\nBản sao lưu tự động cũng sẽ bị xóa.\nKhông thể khôi phục!`,
+    {
+      title: '⚠️ Xóa toàn bộ',
+      okText: 'Xóa hết',
+      cancelText: 'Hủy',
+      danger: true
+    }
+  );
+  if (!ok) return;
 
   const backup = deepClone(state.appData);
   const vaultBackup = localStorage.getItem('spx_backup_vault');
