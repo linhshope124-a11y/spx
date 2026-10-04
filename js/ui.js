@@ -239,6 +239,16 @@ export function initPeriodLabelLongPress() {
   attachPeriodLabelLongPress();
 }
 
+// ================ v50.8.7: TOGGLE OCR DEBUG ================
+export function toggleOcrDebugText() {
+  const el = document.getElementById('ocrDebugText');
+  const btn = document.getElementById('ocrDebugToggle');
+  if (!el) return;
+  const isHidden = el.style.display === 'none';
+  el.style.display = isHidden ? 'block' : 'none';
+  if (btn) btn.innerText = isHidden ? 'Ẩn log' : 'Xem log';
+}
+
 // ================ RANK ================
 export function setRankTier(rankKey, bonusPct, el) {
   if (window.__spxLongPressFired) {
