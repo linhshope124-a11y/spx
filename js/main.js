@@ -14,7 +14,8 @@ import {
   openSettingsModal, closeSettingsModal,
   openCoffeeModal, closeCoffeeModal, copyBankNumber,
   toggleThemeFromMenu,
-  initPeriodLabelLongPress
+  initPeriodLabelLongPress,
+  toggleOcrDebugText
 } from './ui.js';
 import {
   handleOcrImage, preloadTesseractWorker,
@@ -276,6 +277,9 @@ Object.assign(window, {
 
   // Info icon
   showIncomeInfo: _showIncomeInfo,
+
+  // v50.8.7: Toggle OCR debug
+  toggleOcrDebugText,
 
   // REGION — inline onclick
   changeRegion: function(regionKey, el) {
