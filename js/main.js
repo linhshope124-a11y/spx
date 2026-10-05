@@ -11,6 +11,7 @@ import {
   openAddModal, openEditModal, closeModal,
   openMenuModal, closeMenuModal,
   openHistoryTab,
+  openHistoryDatePicker, applyHistoryDateFilter, clearHistoryDateFilter,
   openSettingsModal, closeSettingsModal,
   openCoffeeModal, closeCoffeeModal, copyBankNumber,
   toggleThemeFromMenu,
@@ -30,7 +31,7 @@ import {
   copyDataJson, openPasteJsonModal, closePasteJsonModal,
   confirmImportJsonString, exportData, importData, restoreFromVault
 } from './backup.js';
-import { updateAllViews } from './render.js';
+import { updateAllViews, renderReminderBanner, dismissReminderBanner } from './render.js';
 import {
   testCloudConnection, pushToCloud, pullFromCloud,
   initCloudUI, clearCloudToken
@@ -119,7 +120,7 @@ async function _cleanupDuplicates() {
   await showAlert(`Đã xóa ${dups.length} bản ghi trùng lặp!`, { title: 'Hoàn tất', okText: 'OK' });
 }
 
-// ================ v50.8.8: OCR CACHE STATS + CLEAR ================
+// ================ OCR CACHE STATS + CLEAR ================
 function _updateOcrCacheStats() {
   const el = document.getElementById('ocrCacheStats');
   if (!el) return;
@@ -304,9 +305,15 @@ Object.assign(window, {
   // Toggle OCR debug
   toggleOcrDebugText,
 
-  // v50.8.8: OCR cache
+  // OCR cache
   clearOcrCacheFromSettings: _clearOcrCacheFromSettings,
   updateOcrCacheStats: _updateOcrCacheStats,
+
+  // v50.9.0: Reminder banner + History date filter
+  dismissReminderBanner,
+  openHistoryDatePicker,
+  applyHistoryDateFilter,
+  clearHistoryDateFilter,
 
   // REGION — inline onclick
   changeRegion: function(regionKey, el) {
@@ -385,11 +392,9 @@ Object.assign(window, {
 });
 
 // ================ HOOK SETTINGS MODAL → UPDATE STATS ================
-// Bọc lại openSettingsModal để cập nhật stats mỗi lần mở
 const _origOpenSettingsModal = openSettingsModal;
 window.openSettingsModal = function() {
   _origOpenSettingsModal();
-  // Đợi DOM hiển thị xong → cập nhật stats
   setTimeout(_updateOcrCacheStats, 100);
 };
 
