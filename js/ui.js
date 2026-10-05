@@ -1,5 +1,5 @@
 import { state, persistSettings, persistPeriodState, getRankConfig, setRankConfig } from './state.js';
-import { updateAllViews, renderHistory } from './render.js';
+import { updateAllViews, renderHistory, setHistDateFilter, getHistDateFilter } from './render.js';
 import { getTodayIso, getCurrentMonthIso } from './utils.js';
 import { toggleTheme } from './theme.js';
 import { showConfirm } from './dialog.js';
@@ -30,6 +30,7 @@ export function switchMainTab(tabId, el) {
 
   if (tabId === 'history') {
     state.histFilter = 'all';
+    setHistDateFilter(null);
     document.querySelectorAll('#tab-history .filter-bar .filter-btn')
       .forEach((b, i) => b.classList.toggle('active', i === 0));
     renderHistory();
@@ -43,6 +44,7 @@ export function openHistoryTab() {
   const panel = document.getElementById('tab-history');
   if (panel) panel.classList.add('active');
   state.histFilter = 'all';
+  setHistDateFilter(null);
   document.querySelectorAll('#tab-history .filter-bar .filter-btn')
     .forEach((b, i) => b.classList.toggle('active', i === 0));
   renderHistory();
@@ -78,9 +80,51 @@ export function setOverviewFilter(filter, el) {
 
 export function setHistFilter(filter, btn) {
   state.histFilter = filter;
+  // v50.9.0: đổi loại (Giao/Lấy/Hoàn/Tất cả) → reset filter ngày
+  setHistDateFilter(null);
   const bar = btn.closest('.filter-bar');
-  if (bar) bar.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+  if (bar) {
+    bar.querySelectorAll('.filter-btn').forEach(b => {
+      if (!b.classList.contains('filter-btn-date')) b.classList.remove('active');
+    });
+  }
   btn.classList.add('active');
+  renderHistory();
+}
+
+// ================ v50.9.0: HISTORY DATE PICKER ================
+export function openHistoryDatePicker() {
+  // Nếu đang có filter ngày → bấm chip = bỏ filter (toggle)
+  if (getHistDateFilter()) {
+    setHistDateFilter(null);
+    renderHistory();
+    return;
+  }
+
+  const picker = document.getElementById('historyDatePickerInput');
+  if (!picker) return;
+
+  // Đặt giá trị mặc định = hôm nay hoặc max ngày trong state
+  picker.value = getTodayIso();
+
+  if (typeof picker.showPicker === 'function') {
+    try { picker.showPicker(); } catch { picker.click(); }
+  } else {
+    picker.click();
+  }
+}
+
+export function applyHistoryDateFilter(value) {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    setHistDateFilter(null);
+  } else {
+    setHistDateFilter(value);
+  }
+  renderHistory();
+}
+
+export function clearHistoryDateFilter() {
+  setHistDateFilter(null);
   renderHistory();
 }
 
@@ -239,7 +283,7 @@ export function initPeriodLabelLongPress() {
   attachPeriodLabelLongPress();
 }
 
-// ================ v50.8.7: TOGGLE OCR DEBUG ================
+// ================ TOGGLE OCR DEBUG ================
 export function toggleOcrDebugText() {
   const el = document.getElementById('ocrDebugText');
   const btn = document.getElementById('ocrDebugToggle');
