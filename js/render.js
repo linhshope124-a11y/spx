@@ -6,7 +6,118 @@ import { formatPts, formatDateDisplay, _fmt, getCurrentMonthIso, getTodayIso } f
 const NEED_HIGHLIGHT = 'color:#dc2626;font-size:1.35em;font-weight:900;letter-spacing:0.5px;';
 
 let _lastDataHash = null;
+let _histDateFilter = null;   // v50.9.0: filter Nhật ký theo ngày
 
+// ==================== v50.9.0: HISTORY DATE FILTER ====================
+export function getHistDateFilter() { return _histDateFilter; }
+
+export function setHistDateFilter(v) {
+  _histDateFilter = (v && /^\d{4}-\d{2}-\d{2}$/.test(v)) ? v : null;
+}
+
+// ==================== v50.9.0: REMINDER BANNER ====================
+function computeMissedDays() {
+  const allDates = [
+    ...state.appData.delivery.map(r => r.date),
+    ...state.appData.pickup.map(r => r.date),
+    ...state.appData.return.map(r => r.date)
+  ].filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d));
+
+  if (allDates.length === 0) return { count: 0, dates: [] };
+
+  allDates.sort();
+  const lastDate = allDates[allDates.length - 1];
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+
+  const last = new Date(lastDate + 'T00:00:00');
+  if (last >= yesterday) return { count: 0, dates: [] };
+
+  const missed = [];
+  const cursor = new Date(last);
+  cursor.setDate(cursor.getDate() + 1);
+  while (cursor <= yesterday) {
+    const iso = `${cursor.getFullYear()}-${String(cursor.getMonth()+1).padStart(2,'0')}-${String(cursor.getDate()).padStart(2,'0')}`;
+    missed.push(iso);
+    cursor.setDate(cursor.getDate() + 1);
+  }
+
+  return { count: missed.length, dates: missed };
+}
+
+function formatMissedDate(iso) {
+  const p = iso.split('-');
+  return `${p[2]}/${p[1]}`;
+}
+
+export function renderReminderBanner() {
+  const banner = document.getElementById('reminderBanner');
+  if (!banner) return;
+
+  const { count, dates } = computeMissedDays();
+
+  if (count === 0) {
+    banner.style.display = 'none';
+    return;
+  }
+
+  const todayIso = getTodayIso();
+  const dismissed = localStorage.getItem('spx_reminder_dismissed') || '';
+  if (dismissed === todayIso) {
+    banner.style.display = 'none';
+    return;
+  }
+
+  let stateClass = 'reminder-state-1';
+  let icon = '⚠️';
+  if (count >= 5) { stateClass = 'reminder-state-3'; icon = '🔴'; }
+  else if (count >= 3) { stateClass = 'reminder-state-2'; }
+
+  banner.className = 'reminder-banner ' + stateClass;
+
+  const iconEl = document.getElementById('reminderIcon');
+  const titleEl = document.getElementById('reminderTitle');
+  const subEl = document.getElementById('reminderSub');
+  const secondaryBtn = document.getElementById('reminderSecondaryBtn');
+
+  if (iconEl) iconEl.innerText = icon;
+
+  if (titleEl) {
+    if (count === 1) {
+      titleEl.innerText = `Chưa quét ngày ${formatMissedDate(dates[0])}`;
+    } else {
+      titleEl.innerText = `Chưa quét ${count} ngày`;
+    }
+  }
+
+  if (subEl) {
+    if (count === 1) {
+      subEl.innerText = '';
+    } else if (count <= 4) {
+      subEl.innerText = dates.map(formatMissedDate).join(' · ');
+    } else {
+      subEl.innerText = `Từ ${formatMissedDate(dates[0])} đến ${formatMissedDate(dates[dates.length-1])}`;
+    }
+  }
+
+  if (secondaryBtn) {
+    secondaryBtn.style.display = count >= 5 ? 'inline-flex' : 'none';
+  }
+
+  banner.style.display = 'block';
+}
+
+export function dismissReminderBanner() {
+  const todayIso = getTodayIso();
+  try { localStorage.setItem('spx_reminder_dismissed', todayIso); } catch {}
+  const banner = document.getElementById('reminderBanner');
+  if (banner) banner.style.display = 'none';
+}
+
+// ==================== HELPERS ====================
 function getRegionThresholds(region) {
   if (region === 'hcm_hn') return { full: 80, half: 40 };
   return { full: 60, half: 30 };
@@ -42,7 +153,6 @@ function getWorkDaysByPeriod() {
   return workDays;
 }
 
-// v50.1: context label có năm
 function updateHeroContextLabel() {
   const el = document.getElementById('heroContext');
   if (!el) return;
@@ -51,7 +161,6 @@ function updateHeroContextLabel() {
   el.innerText = `Tháng ${parseInt(m, 10)}/${y}`;
 }
 
-// ===== v49: renderRow 6 cột =====
 function renderRow(weightLabel, orders, tier, typeClass) {
   const shortLabel = weightLabel.replace(/\s+/g, '').replace('kg', '');
 
@@ -138,11 +247,9 @@ function _updateAllViews() {
 
   const rawBase = delPts + pickPts + retPts;
 
-  // ===== v50.8.0: Hạng thưởng theo tháng =====
   const rankCfg   = getRankConfig(state.currentMonth);
   const rankBonus = Math.round(rawBase * rankCfg.bonus);
 
-  // ===== v50.4: Lương theo tháng =====
   const salaryDays  = getSalaryDaysForPeriod();
   const workDays    = getWorkDaysByPeriod();
   const displayDays = Math.min(workDays, salaryDays);
@@ -182,7 +289,7 @@ function _updateAllViews() {
 
   updateHeroContextLabel();
 
-  // ===== v49: HERO TILES =====
+  // ===== HERO TILES =====
   const heroTileDelEl  = document.getElementById('heroTileDel');
   const heroTilePickEl = document.getElementById('heroTilePick');
   const heroTileRetEl  = document.getElementById('heroTileRet');
@@ -199,21 +306,6 @@ function _updateAllViews() {
     heroTileRetEl.innerText = total.ret === 0 ? '0' : _fmt(total.ret);
     heroTileRetEl.classList.toggle('is-zero', total.ret === 0);
   }
-
-  // Legacy tiles (nếu vẫn còn DOM cũ)
-  const miniDelOrdersEl  = document.getElementById('miniDelOrders');
-  const miniDelPointsEl  = document.getElementById('miniDelPoints');
-  const miniPickOrdersEl = document.getElementById('miniPickOrders');
-  const miniPickPointsEl = document.getElementById('miniPickPoints');
-  const miniRetOrdersEl  = document.getElementById('miniRetOrders');
-  const miniRetPointsEl  = document.getElementById('miniRetPoints');
-
-  if (miniDelOrdersEl)  miniDelOrdersEl.innerText  = _fmt(total.del);
-  if (miniDelPointsEl)  miniDelPointsEl.innerText  = _fmt(delPts);
-  if (miniPickOrdersEl) miniPickOrdersEl.innerText = _fmt(total.pick);
-  if (miniPickPointsEl) miniPickPointsEl.innerText = _fmt(pickPts);
-  if (miniRetOrdersEl)  miniRetOrdersEl.innerText  = _fmt(total.ret);
-  if (miniRetPointsEl)  miniRetPointsEl.innerText  = _fmt(retPts);
 
   // Hero tab chi tiết
   document.getElementById('delTotalPoints').innerHTML =
@@ -232,9 +324,6 @@ function _updateAllViews() {
   const pctDelEl  = document.getElementById('ratioPctDel');
   const pctPickEl = document.getElementById('ratioPctPick');
   const pctRetEl  = document.getElementById('ratioPctRet');
-  const ordersDelEl  = document.getElementById('ratioOrdersDel');
-  const ordersPickEl = document.getElementById('ratioOrdersPick');
-  const ordersRetEl  = document.getElementById('ratioOrdersRet');
 
   if (totalOrders > 0) {
     if (ratioContentEl) ratioContentEl.style.display = 'block';
@@ -267,11 +356,8 @@ function _updateAllViews() {
     if (ratioContentEl) ratioContentEl.style.display = 'none';
     if (ratioEmptyEl)   ratioEmptyEl.style.display   = 'block';
   }
-  if (ordersDelEl)  ordersDelEl.innerText  = _fmt(total.del);
-  if (ordersPickEl) ordersPickEl.innerText = _fmt(total.pick);
-  if (ordersRetEl)  ordersRetEl.innerText  = _fmt(total.ret);
 
-  // ===== v50.4: Income UI =====
+  // ===== Income UI =====
   const salaryBaseEl   = document.getElementById('salaryBaseInput');
   const buuCucInput    = document.getElementById('manualBuuCucInput');
   const taiXeInput     = document.getElementById('manualTaiXeInput');
@@ -285,7 +371,6 @@ function _updateAllViews() {
   if (buuCucInput && document.activeElement !== buuCucInput)   buuCucInput.value  = manualBuuCuc;
   if (taiXeInput  && document.activeElement !== taiXeInput)    taiXeInput.value   = manualTaiXe;
 
-  // Hint tháng áp dụng
   const salaryMonthHint = document.getElementById('salaryMonthHint');
   if (salaryMonthHint) {
     const [y, m] = state.currentMonth.split('-');
@@ -322,6 +407,9 @@ function _updateAllViews() {
 
   persistData();
 
+  // ===== v50.9.0: Reminder banner =====
+  renderReminderBanner();
+
   const currentHash = JSON.stringify(state.appData);
   if (_lastDataHash === null) {
     _lastDataHash = currentHash;
@@ -344,11 +432,24 @@ export function updateAllViews() {
   _updateAllViews_debounced();
 }
 
+// ==================== v50.9.0: RENDER HISTORY (có filter ngày) ====================
 export function renderHistory() {
   const container = document.getElementById('historyEntries');
   if (!container) return;
   const prevScroll = container.scrollTop;
   container.innerHTML = '';
+
+  // Update chip label
+  const chip = document.getElementById('histDateChip');
+  if (chip) {
+    if (_histDateFilter) {
+      chip.innerText = '📅 ' + formatDateDisplay(_histDateFilter) + ' ✕';
+      chip.classList.add('active');
+    } else {
+      chip.innerText = '📅 Ngày';
+      chip.classList.remove('active');
+    }
+  }
 
   let list = [];
   if (state.histFilter === 'all' || state.histFilter === 'delivery')
@@ -358,11 +459,20 @@ export function renderHistory() {
   if (state.histFilter === 'all' || state.histFilter === 'return')
     state.appData.return.forEach(r => list.push({ ...r, type: 'return' }));
 
-  list = list.filter(r => isDateInCurrentPeriod(r.date, state.periodMode, state.currentMonth, state.currentDate));
+  // v50.9.0: filter theo ngày (nếu có) — bỏ qua filter theo tháng
+  if (_histDateFilter) {
+    list = list.filter(r => r.date === _histDateFilter);
+  } else {
+    list = list.filter(r => isDateInCurrentPeriod(r.date, state.periodMode, state.currentMonth, state.currentDate));
+  }
+
   list.sort((a, b) => (b.date > a.date ? 1 : b.date < a.date ? -1 : b.id - a.id));
 
   if (list.length === 0) {
-    container.innerHTML = '<div style="font-size:11.5px;color:var(--text-3);text-align:center;padding:20px">Chưa có bản ghi nào trong kỳ được chọn.</div>';
+    const emptyMsg = _histDateFilter
+      ? `Không có bản ghi ngày ${formatDateDisplay(_histDateFilter)}`
+      : 'Chưa có bản ghi nào trong kỳ được chọn.';
+    container.innerHTML = `<div style="font-size:11.5px;color:var(--text-3);text-align:center;padding:20px">${emptyMsg}</div>`;
     return;
   }
 
