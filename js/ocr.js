@@ -1,5 +1,5 @@
 // =============================================================
-// OCR ENGINE v2.1 — PART 1/3
+// OCR ENGINE v2.2 — PART 1/3
 // Config · AbortController · Worker · Cache
 // =============================================================
 
@@ -11,14 +11,15 @@ import { updateAllViews } from './render.js';
 import { showAlert, showConfirm } from './dialog.js';
 
 // ==================== CONFIG ====================
-const OCR_CACHE_VERSION = 'v3';        // bump khi đổi parser
+const OCR_CACHE_VERSION = 'v3';
 const OCR_TIMEOUT_MS    = 30000;
 const OCR_CACHE_MAX     = 200;
 const LS_CACHE_PREFIX   = 'spx_ocr_cache_';
 const LS_CACHE_INDEX    = 'spx_ocr_cache_index';
 const LS_CACHE_MAX_BYTES = 4 * 1024 * 1024;
 
-const SCORE_AUTO_SAVE = 92;
+// ⚠️ TEST MODE: 999 = tắt auto-save để luôn hiện Review Modal. Nhớ đổi lại 92 khi test xong!
+const SCORE_AUTO_SAVE = 999;
 const SCORE_REVIEW    = 85;
 const SCORE_MAX_CHECKSUM_FAIL = 84;
 
@@ -153,7 +154,7 @@ function withTimeout(promise, ms, signal) {
   });
 }
 
-// ==================== OCR RECOGNIZE (timeout + 1 retry) ====================
+// ==================== OCR RECOGNIZE ====================
 async function ocrRecognize(preprocessedDataUrl, signal) {
   _checkAborted(signal);
 
@@ -398,7 +399,7 @@ export function getOcrCacheStats() {
   };
 }
 // =============================================================
-// OCR ENGINE v2.1 — PART 2/3
+// OCR ENGINE v2.2 — PART 2/3
 // Image · Preprocess · Parser · Validation · Scoring
 // =============================================================
 
@@ -666,10 +667,6 @@ async function preprocessPass3(rawDataUrl, fixedThreshold, signal) {
 }
 
 // ==================== PARSE ====================
-
-/**
- * v2.1: Bắt 12+ biến thể "Đơn hàng" từ log thực tế
- */
 function normalizeOcrText(text) {
   return text
     .replace(/[–—−]/g, '-')
@@ -678,7 +675,7 @@ function normalizeOcrText(text) {
     .replace(/\bO(\d)/g, '0$1')
     .replace(/(\d)O\b/g, '$10')
 
-    // ===== FIX: Bắt 12 biến thể "Đơn hàng" =====
+    // Fix 12+ biến thể "Đơn hàng"
     .replace(/[đĐ][ơơọo]n\s*h[àa]ng?/gi, 'Đơn hàng')
     .replace(/[đĐ][ơơọo]nh\b/gi, 'Đơn hàng')
     .replace(/[đĐ]nh\b/gi, 'Đơn hàng')
@@ -767,20 +764,12 @@ function mapRangeToKey(minStr, maxStr) {
   return null;
 }
 
-/**
- * v2.1: LINE-BASED parser — tìm "N Đơn hàng" trong ±3 dòng quanh range
- * 
- * Fix vấn đề: OCR đọc "141 Đơnh" ở DÒNG TRÊN range
- * → parser cũ tìm 1 chiều phía sau → miss
- * → parser mới tìm 2 chiều cả trước + sau range
- */
 function parseBlockBased(text) {
   const weights = {
     '0_2': 0, '2_4': 0, '4_6': 0, '6_8': 0,
     '8_10': 0, '10_12': 0, '12_15': 0, 'over_15': 0
   };
 
-  // Tách lines + giữ offset tuyệt đối
   const lines = text.split('\n');
   const lineOffsets = [];
   let offset = 0;
@@ -789,7 +778,6 @@ function parseBlockBased(text) {
     offset += line.length + 1;
   });
 
-  // 1. Tìm tất cả range + biết line nào
   const rangeRegex = /(\d{1,6}\.\d{3})\s*-\s*(\d{1,6}\.\d{3})/g;
   const ranges = [];
   let m;
@@ -809,13 +797,11 @@ function parseBlockBased(text) {
     return { weights, detectedRanges: 0, parseMode: 'block-empty' };
   }
 
-  // 2. Đánh dấu vị trí "Tổng N Đơn hàng" để loại trừ
   const totalRegex = /Tổng\s*[:\-]?\s*\d{1,6}\s*Đơn\s*hàng/gi;
   const totalMatches = [...text.matchAll(totalRegex)];
   const isInsideTotal = (pos) =>
     totalMatches.some(t => pos >= t.index && pos < t.index + t[0].length);
 
-  // 3. Với mỗi range → tìm "N Đơn hàng" trong ±3 dòng
   const orderRegex = /(\d{1,6})\s*Đơn\s*hàng/i;
   const LINE_WINDOW = 3;
 
@@ -1017,7 +1003,7 @@ function getTypeLabel(r) {
        : 'Hoàn';
 }
 // =============================================================
-// OCR ENGINE v2.1 — PART 3/3
+// OCR ENGINE v2.2 — PART 3/3
 // Pipeline · Routing · Modals · Batch · Exports
 // =============================================================
 
@@ -1269,6 +1255,52 @@ async function tryAutoSaveForce(r) {
   state.appData[type].unshift({ id: newId, date: r.parsedDate, weights });
   updateAllViews();
   return true;
+}
+
+// ==================== COPY OCR LOG (MỚI v2.2) ====================
+export async function copyOcrLog() {
+  const debugEl = document.getElementById('ocrDebugText');
+  if (!debugEl) {
+    showToast('Không có log để copy', 'warning', 1500);
+    return;
+  }
+  const text = debugEl.innerText;
+  if (!text || text.trim() === '') {
+    showToast('Log trống', 'warning', 1500);
+    return;
+  }
+
+  // Thử Clipboard API
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      showToast('Đã copy log (' + text.length + ' ký tự)', 'success', 1800);
+      return;
+    }
+  } catch (e) {
+    console.warn('[OCR] Clipboard API fail:', e);
+  }
+
+  // Fallback: textarea + execCommand
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.top = '-9999px';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    if (ok) {
+      showToast('Đã copy log (' + text.length + ' ký tự)', 'success', 1800);
+    } else {
+      showToast('Không copy được — thử giữ tay vào log', 'error', 2500);
+    }
+  } catch (e) {
+    showToast('Không copy được: ' + e.message, 'error', 2500);
+  }
 }
 
 // ==================== TAB PICKER MODAL ====================
@@ -1698,7 +1730,31 @@ export function fillModalFromResult(item) {
     debugEl.innerText = `${scoreStr}\n${checksumStr}\n${tabStr}\n${attemptStr}\n\n${r.rawText || '(không có text)'}`;
     debugEl.style.display = 'none';
     const toggleBtn = document.getElementById('ocrDebugToggle');
-    if (toggleBtn) toggleBtn.innerText = 'Xem log';
+    if (toggleBtn) {
+      toggleBtn.innerText = 'Xem log';
+
+      // ⭐ v2.2: Inject nút Copy log bên cạnh
+      if (!document.getElementById('ocrCopyLogBtn')) {
+        const copyBtn = document.createElement('button');
+        copyBtn.id = 'ocrCopyLogBtn';
+        copyBtn.type = 'button';
+        copyBtn.innerText = '📋 Copy log';
+        copyBtn.style.cssText = `
+          background: transparent;
+          border: 1px solid var(--border);
+          color: var(--text-3);
+          font-size: 10px;
+          padding: 4px 10px;
+          border-radius: 6px;
+          cursor: pointer;
+          font-family: inherit;
+          font-weight: 600;
+          margin-left: 6px;
+        `;
+        copyBtn.onclick = () => copyOcrLog();
+        toggleBtn.parentNode.appendChild(copyBtn);
+      }
+    }
   }
 
   openAddModal();
