@@ -1,4 +1,4 @@
-const CACHE = 'spx-tracker-v522';
+const CACHE = 'spx-tracker-v523';
 const CORE = [
   './',
   './index.html',
@@ -34,7 +34,6 @@ self.addEventListener('activate', e => {
       .then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k))))
       .then(() => self.clients.claim())
       .then(() => {
-        // Thông báo tất cả client → reload để dùng bản mới
         return self.clients.matchAll({ type: 'window' }).then(clients => {
           clients.forEach(client => client.postMessage({
             type: 'SW_UPDATED',
@@ -45,7 +44,6 @@ self.addEventListener('activate', e => {
   );
 });
 
-// Nhận lệnh skipWaiting từ client
 self.addEventListener('message', e => {
   if (e.data && e.data.type === 'SKIP_WAITING') {
     self.skipWaiting();
@@ -58,7 +56,6 @@ self.addEventListener('fetch', e => {
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
 
-  // KHÔNG cache version.json — luôn fetch mới từ network
   if (url.pathname.endsWith('/version.json')) {
     e.respondWith(fetch(req, { cache: 'no-store' }));
     return;
