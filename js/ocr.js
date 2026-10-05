@@ -1,5 +1,5 @@
 // =============================================================
-// OCR ENGINE v2.2 — PART 1/3
+// OCR ENGINE v2.3 — PART 1/3
 // Config · AbortController · Worker · Cache
 // =============================================================
 
@@ -11,7 +11,7 @@ import { updateAllViews } from './render.js';
 import { showAlert, showConfirm } from './dialog.js';
 
 // ==================== CONFIG ====================
-const OCR_CACHE_VERSION = 'v3';
+const OCR_CACHE_VERSION = 'v4';
 const OCR_TIMEOUT_MS    = 30000;
 const OCR_CACHE_MAX     = 200;
 const LS_CACHE_PREFIX   = 'spx_ocr_cache_';
@@ -399,7 +399,7 @@ export function getOcrCacheStats() {
   };
 }
 // =============================================================
-// OCR ENGINE v2.2 — PART 2/3
+// OCR ENGINE v2.3 — PART 2/3
 // Image · Preprocess · Parser · Validation · Scoring
 // =============================================================
 
@@ -675,6 +675,9 @@ function normalizeOcrText(text) {
     .replace(/\bO(\d)/g, '0$1')
     .replace(/(\d)O\b/g, '$10')
 
+    // ⭐ v2.3 FIX: OCR đọc "1" thành Ì/Í/I/l/| — chỉ khi trước "Đơn hàng"
+    .replace(/(Ì|Í|I|l|\|)(\s*)(?=Đơn\s*hàng)/gi, '1$2')
+
     // Fix 12+ biến thể "Đơn hàng"
     .replace(/[đĐ][ơơọo]n\s*h[àa]ng?/gi, 'Đơn hàng')
     .replace(/[đĐ][ơơọo]nh\b/gi, 'Đơn hàng')
@@ -805,6 +808,9 @@ function parseBlockBased(text) {
   const orderRegex = /(\d{1,6})\s*Đơn\s*hàng/i;
   const LINE_WINDOW = 3;
 
+  // ⭐ v2.3: Track số đã dùng — range khác không được "ăn trộm"
+  const usedMatches = new Set();
+
   ranges.forEach(r => {
     const key = mapRangeToKey(r.minStr, r.maxStr);
     if (!key) return;
@@ -825,26 +831,31 @@ function parseBlockBased(text) {
         const absPos = lineStart + mm.index;
         if (isInsideTotal(absPos)) continue;
 
+        // ⭐ v2.3: Skip nếu số này đã bị range khác lấy
+        if (usedMatches.has(absPos)) continue;
+
         const val = parseInt(mm[1], 10);
         if (!Number.isFinite(val) || val < 0) continue;
 
         const lineDist = Math.abs(i - r.lineIdx);
         if (lineDist < bestDist) {
           bestDist = lineDist;
-          best = { value: val };
+          best = { value: val, absPos };
         }
       }
     }
 
     if (best && weights[key] === 0) {
       weights[key] = best.value;
+      // ⭐ v2.3: Mark số đã dùng
+      if (best.absPos != null) usedMatches.add(best.absPos);
     }
   });
 
   return {
     weights,
     detectedRanges: ranges.length,
-    parseMode: 'block-v3-line-based'
+    parseMode: 'block-v4-owned'
   };
 }
 
@@ -1003,7 +1014,7 @@ function getTypeLabel(r) {
        : 'Hoàn';
 }
 // =============================================================
-// OCR ENGINE v2.2 — PART 3/3
+// OCR ENGINE v2.3 — PART 3/3
 // Pipeline · Routing · Modals · Batch · Exports
 // =============================================================
 
@@ -1257,7 +1268,7 @@ async function tryAutoSaveForce(r) {
   return true;
 }
 
-// ==================== COPY OCR LOG (MỚI v2.2) ====================
+// ==================== COPY OCR LOG ====================
 export async function copyOcrLog() {
   const debugEl = document.getElementById('ocrDebugText');
   if (!debugEl) {
