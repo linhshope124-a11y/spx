@@ -385,7 +385,7 @@ function extractDate(text) {
   return getTodayIso();
 }
 
-// ==================== v50.9.1: HASH BLOB (khôi phục) ====================
+// ==================== HASH BLOB ====================
 async function hashBlob(file) {
   try {
     const buf = await file.arrayBuffer();
@@ -704,21 +704,23 @@ async function tryAutoSave(r) {
   return true;
 }
 
-// ==================== MAIN ====================
-export async function handleOcrImage(event) {
-  const files = Array.from(event.target.files || []);
-  event.target.value = '';
-  if (files.length === 0) { pendingAppend = false; return; }
-
-  const wasAppend = pendingAppend;
-  pendingAppend = false;
+// ==================== PIPELINE DÙNG CHUNG ====================
+/**
+ * Xử lý một mảng File qua pipeline OCR + auto-save / batch
+ * Dùng chung cho cả `<input>` và Share Target.
+ *
+ * @param {File[]} files     - Mảng File ảnh (đã lọc hợp lệ)
+ * @param {boolean} wasAppend - true nếu đang append vào batch hiện có
+ */
+async function _runOcrFromFiles(files, wasAppend = false) {
+  if (!files || files.length === 0) return;
 
   const overlay = document.getElementById('ocrLoadingOverlay');
-  overlay.style.display = 'flex';
+  if (overlay) overlay.style.display = 'flex';
 
   try {
     const newResults = await processFiles(files);
-    overlay.style.display = 'none';
+    if (overlay) overlay.style.display = 'none';
 
     const autoSaved = [];
     const duplicates = [];
@@ -743,6 +745,7 @@ export async function handleOcrImage(event) {
       }
     }
 
+    // ===== Trường hợp còn ảnh cần check =====
     if (needAttention.length > 0) {
       if (wasAppend) {
         batchResults.push(...needAttention);
@@ -752,6 +755,7 @@ export async function handleOcrImage(event) {
         return;
       }
 
+      // Ảnh đơn lẻ lỗi / cần check
       if (files.length === 1) {
         const item = newResults[0];
         if (item.error) {
@@ -768,6 +772,7 @@ export async function handleOcrImage(event) {
       return;
     }
 
+    // ===== Tất cả đều pass hoặc dup =====
     if (files.length === 1) {
       const item = newResults[0];
       const r = item.result;
@@ -786,11 +791,58 @@ export async function handleOcrImage(event) {
     }
   } catch (err) {
     console.error(err);
-    overlay.style.display = 'none';
+    if (overlay) overlay.style.display = 'none';
     showToast('Lỗi khi quét ảnh', 'error', 3000);
   }
 }
 
+// ==================== ENTRY: INPUT FILE ====================
+export async function handleOcrImage(event) {
+  const files = Array.from(event.target.files || []);
+  event.target.value = '';
+  if (files.length === 0) { pendingAppend = false; return; }
+
+  const wasAppend = pendingAppend;
+  pendingAppend = false;
+
+  await _runOcrFromFiles(files, wasAppend);
+}
+
+// ==================== ENTRY: SHARE TARGET (SPX-F) ====================
+/**
+ * Nhận File[] trực tiếp từ Share Target (manifest.share_target)
+ * Gọi bởi main.js khi phát hiện share từ Gallery → chọn SPX Tracker.
+ *
+ * @param {File[]|FileList} sharedFiles
+ */
+export async function handleSharedImage(sharedFiles) {
+  const arr = Array.from(sharedFiles || []);
+  if (arr.length === 0) {
+    showToast('Không nhận được ảnh từ chia sẻ', 'warning', 2500);
+    return;
+  }
+
+  // Lọc chỉ nhận file ảnh (bỏ text/URL/file khác)
+  const images = arr.filter(f => f && f.type && f.type.startsWith('image/'));
+  const skipped = arr.length - images.length;
+
+  if (images.length === 0) {
+    showToast(
+      skipped > 0 ? 'Chia sẻ không chứa ảnh — bỏ qua' : 'Không có file hợp lệ',
+      'error', 3000
+    );
+    return;
+  }
+
+  if (skipped > 0) {
+    showToast(`Bỏ qua ${skipped} mục không phải ảnh`, 'warning', 2000);
+  }
+
+  // Batch chỉ dùng khi share nhiều ảnh + cần check
+  await _runOcrFromFiles(images, false);
+}
+
+// ==================== SUMMARY TOAST ====================
 function showSummaryToast(saved, dup, need, delayMs = 0) {
   const parts = [];
   if (saved > 0) parts.push(`Đã lưu ${saved}`);
@@ -809,42 +861,43 @@ function showSummaryToast(saved, dup, need, delayMs = 0) {
   else fire();
 }
 
+// ==================== PROCESS FILES ====================
 async function processFiles(files) {
   const out = [];
   const statusTitle = document.getElementById('ocrStatusTitle');
   const statusDesc  = document.getElementById('ocrStatusDesc');
-  statusTitle.innerText = 'Đang khởi tạo...';
-  statusDesc.innerText  = cachedTesseractWorker ? 'Worker sẵn sàng' : 'Lần đầu tải ~15MB...';
+  if (statusTitle) statusTitle.innerText = 'Đang khởi tạo...';
+  if (statusDesc)  statusDesc.innerText  = cachedTesseractWorker ? 'Worker sẵn sàng' : 'Lần đầu tải ~15MB...';
 
   await getTesseractWorker();
 
   for (let i = 0; i < files.length; i++) {
     const file = files[i];
-    statusTitle.innerText = `Ảnh ${i + 1}/${files.length}`;
-    statusDesc.innerText  = 'Đang đọc file...';
+    if (statusTitle) statusTitle.innerText = `Ảnh ${i + 1}/${files.length}`;
+    if (statusDesc)  statusDesc.innerText  = 'Đang đọc file...';
 
     try {
       const hash = await hashBlob(file);
       const cached = cacheGet(hash);
 
       if (cached) {
-        statusDesc.innerText = '⚡ Dùng cache...';
+        if (statusDesc) statusDesc.innerText = '⚡ Dùng cache...';
         const rawDataUrl = await readFileAsDataURL(file);
         const cachedResult = { ...cached.result, fullDataUrl: rawDataUrl };
         out.push({ file: file.name, thumbnail: cached.thumbnail, result: cachedResult, error: null, fromCache: true });
         continue;
       }
 
-      statusDesc.innerText = 'Đang đọc file...';
+      if (statusDesc) statusDesc.innerText = 'Đang đọc file...';
       const rawDataUrl = await readFileAsDataURL(file);
 
-      statusDesc.innerText = 'Xử lý ảnh...';
+      if (statusDesc) statusDesc.innerText = 'Xử lý ảnh...';
       const thumbnail = await makeThumbnail(rawDataUrl, 96);
 
-      statusDesc.innerText = 'Xác định tab...';
+      if (statusDesc) statusDesc.innerText = 'Xác định tab...';
       const detectedType = await detectActiveTabByOrangeLine(rawDataUrl);
 
-      statusDesc.innerText = 'Quét lần 1...';
+      if (statusDesc) statusDesc.innerText = 'Quét lần 1...';
       const pre1 = await preprocessImage(rawDataUrl, { upscale: 2.0, useOtsu: true });
       const text1 = await ocrRecognize(pre1.dataUrl);
       const parsed1 = parseOcrText(text1);
@@ -854,7 +907,7 @@ async function processFiles(files) {
       let bestDiff = parsed1.expectedTotal !== null ? Math.abs(parsed1.totalFound - parsed1.expectedTotal) : 9999;
 
       if (bestDiff > 0) {
-        statusDesc.innerText = 'Quét lần 2...';
+        if (statusDesc) statusDesc.innerText = 'Quét lần 2...';
         const pre2 = await preprocessImage(rawDataUrl, { upscale: 2.0, useOtsu: false, threshold: 130 });
         const text2 = await ocrRecognize(pre2.dataUrl);
         const parsed2 = parseOcrText(text2);
@@ -863,7 +916,7 @@ async function processFiles(files) {
       }
 
       if (bestDiff > 0) {
-        statusDesc.innerText = 'Quét lần 3...';
+        if (statusDesc) statusDesc.innerText = 'Quét lần 3...';
         const pre3 = await preprocessImage(rawDataUrl, { upscale: 2.5, useOtsu: false, threshold: 160 });
         const text3 = await ocrRecognize(pre3.dataUrl);
         const parsed3 = parseOcrText(text3);
