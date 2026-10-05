@@ -1,6 +1,12 @@
 import { state, persistSettings, persistPeriodState, getRankConfig, setRankConfig } from './state.js';
-import { updateAllViews, renderHistory, setHistDateFilter, getHistDateFilter } from './render.js';
-import { getTodayIso, getCurrentMonthIso } from './utils.js';
+import {
+  updateAllViews, renderHistory,
+  getHistFilters, setHistFilters, resetHistFilters,
+  hasActiveHistFilters, countActiveHistFilters,
+  // backward compat v50.9.0
+  setHistDateFilter, getHistDateFilter
+} from './render.js';
+import { getTodayIso, getCurrentMonthIso, formatDateDisplay } from './utils.js';
 import { toggleTheme } from './theme.js';
 import { showConfirm } from './dialog.js';
 
@@ -19,6 +25,12 @@ function formatMonthLabelShort(isoMonth) {
   return `Tháng ${parseInt(m, 10)}/${y}`;
 }
 
+function _shiftDateIso(isoDate, days) {
+  const d = new Date(isoDate + 'T00:00:00');
+  d.setDate(d.getDate() + days);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 // ================ TABS ================
 export function switchMainTab(tabId, el) {
   state.activeTab = tabId;
@@ -29,11 +41,7 @@ export function switchMainTab(tabId, el) {
   if (panel) panel.classList.add('active');
 
   if (tabId === 'history') {
-    state.histFilter = 'all';
-    setHistDateFilter(null);
-    document.querySelectorAll('#tab-history .filter-bar .filter-btn')
-      .forEach((b, i) => b.classList.toggle('active', i === 0));
-    renderHistory();
+    _resetHistoryView();
   }
 }
 
@@ -43,12 +51,24 @@ export function openHistoryTab() {
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
   const panel = document.getElementById('tab-history');
   if (panel) panel.classList.add('active');
-  state.histFilter = 'all';
-  setHistDateFilter(null);
-  document.querySelectorAll('#tab-history .filter-bar .filter-btn')
-    .forEach((b, i) => b.classList.toggle('active', i === 0));
-  renderHistory();
+  _resetHistoryView();
   window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+/**
+ * Reset filter history về mặc định (dùng khi vào tab Nhật ký)
+ */
+function _resetHistoryView() {
+  state.histFilter = 'all';
+  resetHistFilters();
+  // Reset filter bar 4 nút cũ
+  document.querySelectorAll('#tab-history .filter-bar .filter-btn').forEach(b => {
+    if (b.classList.contains('filter-btn-search')) return;
+    if (b.classList.contains('filter-btn-date')) return;
+    const isAllBtn = b.textContent.trim() === 'Tất cả';
+    b.classList.toggle('active', isAllBtn);
+  });
+  renderHistory();
 }
 
 export function switchModalSubTab(tabKey) {
@@ -64,7 +84,7 @@ export function switchModalSubTab(tabKey) {
   if (pane) pane.style.display = 'block';
 }
 
-// ================ FILTERS ================
+// ================ FILTERS (OVERVIEW) ================
 export function setOverviewFilter(filter, el) {
   state.overviewFilter = filter;
   const bar = el.closest('.filter-bar');
@@ -78,55 +98,320 @@ export function setOverviewFilter(filter, el) {
   });
 }
 
+// ================ v50.11.0: HISTORY FILTER (SPX-H) ================
+
+/**
+ * Filter bar 4 nút cũ [Tất cả/Giao/Lấy/Hoàn]
+ * Đồng bộ 2 chiều với _histFilters.types (qua API render.js)
+ */
 export function setHistFilter(filter, btn) {
   state.histFilter = filter;
-  // v50.9.0: đổi loại (Giao/Lấy/Hoàn/Tất cả) → reset filter ngày
-  setHistDateFilter(null);
+
+  const types = {
+    delivery: filter === 'all' || filter === 'delivery',
+    pickup:   filter === 'all' || filter === 'pickup',
+    return:   filter === 'all' || filter === 'return'
+  };
+  setHistFilters({ types });
+
+  // Active state cho 4 nút cũ (bỏ qua chip 🔍)
   const bar = btn.closest('.filter-bar');
   if (bar) {
     bar.querySelectorAll('.filter-btn').forEach(b => {
-      if (!b.classList.contains('filter-btn-date')) b.classList.remove('active');
+      if (b.classList.contains('filter-btn-search')) return;
+      if (b.classList.contains('filter-btn-date')) return;
+      b.classList.remove('active');
     });
   }
   btn.classList.add('active');
+
+  // Đồng bộ chip trong panel (nếu đang có DOM)
+  document.querySelectorAll('#filterTypeChips .filter-toggle-chip').forEach(b => {
+    b.classList.toggle('active', types[b.dataset.filterType] === true);
+  });
+
   renderHistory();
 }
 
-// ================ v50.9.0: HISTORY DATE PICKER ================
+/**
+ * Mở panel filter nâng cao (bottom sheet)
+ */
+export function openHistoryFilterPanel() {
+  _bindFilterPanelInputs();
+  _fillFilterPanelFromState();
+  document.getElementById('historyFilterPanel').classList.add('active');
+}
+
+export function closeHistoryFilterPanel() {
+  document.getElementById('historyFilterPanel').classList.remove('active');
+}
+
+/**
+ * Nạp state filter hiện tại vào DOM panel
+ */
+function _fillFilterPanelFromState() {
+  const f = getHistFilters();
+
+  const fromEl = document.getElementById('filterDateFrom');
+  const toEl   = document.getElementById('filterDateTo');
+  const minEl  = document.getElementById('filterMinOrders');
+  const maxEl  = document.getElementById('filterMaxOrders');
+
+  if (fromEl) fromEl.value = f.dateFrom || '';
+  if (toEl)   toEl.value   = f.dateTo   || '';
+  if (minEl)  minEl.value  = f.minOrders != null ? f.minOrders : '';
+  if (maxEl)  maxEl.value  = f.maxOrders != null ? f.maxOrders : '';
+
+  // Type chips
+  document.querySelectorAll('#filterTypeChips .filter-toggle-chip').forEach(b => {
+    b.classList.toggle('active', f.types[b.dataset.filterType] === true);
+  });
+
+  // Score chips
+  document.querySelectorAll('#filterScoreChips .filter-radio-chip').forEach(b => {
+    b.classList.toggle('active', b.dataset.score === f.scoreFilter);
+  });
+
+  // Clear active trên quick buttons
+  document.querySelectorAll('.filter-quick-btn[data-range]').forEach(b => b.classList.remove('active'));
+
+  _updateApplyBtnLabel();
+}
+
+/**
+ * Bind oninput/onchange cho các input trong panel (chỉ 1 lần)
+ */
+function _bindFilterPanelInputs() {
+  ['filterDateFrom', 'filterDateTo', 'filterMinOrders', 'filterMaxOrders'].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el || el.dataset.bound === '1') return;
+    el.dataset.bound = '1';
+    el.addEventListener('input', _updateApplyBtnLabel);
+    el.addEventListener('change', _updateApplyBtnLabel);
+  });
+}
+
+/**
+ * Đếm số filter đang bật TRONG PANEL (chưa commit)
+ */
+function _countFiltersInPanel() {
+  let n = 0;
+
+  const fromEl = document.getElementById('filterDateFrom');
+  const toEl   = document.getElementById('filterDateTo');
+  if ((fromEl && fromEl.value) || (toEl && toEl.value)) n++;
+
+  const activeTypeCount = document.querySelectorAll('#filterTypeChips .filter-toggle-chip.active').length;
+  if (activeTypeCount < 3) n++;
+
+  const minEl = document.getElementById('filterMinOrders');
+  const maxEl = document.getElementById('filterMaxOrders');
+  if ((minEl && minEl.value !== '') || (maxEl && maxEl.value !== '')) n++;
+
+  const scoreActive = document.querySelector('#filterScoreChips .filter-radio-chip.active');
+  if (scoreActive && scoreActive.dataset.score !== 'all') n++;
+
+  return n;
+}
+
+function _updateApplyBtnLabel() {
+  const btn = document.getElementById('applyFilterBtn');
+  if (!btn) return;
+  const n = _countFiltersInPanel();
+  btn.innerText = n > 0 ? `✨ Áp dụng (${n})` : '✨ Áp dụng';
+}
+
+/**
+ * Quick pick date range: today / 7d / 30d / month
+ */
+export function quickPickDateRange(range, btn) {
+  const today = getTodayIso();
+  let from = null, to = today;
+
+  if (range === 'today') {
+    from = today;
+  } else if (range === '7d') {
+    from = _shiftDateIso(today, -6);
+  } else if (range === '30d') {
+    from = _shiftDateIso(today, -29);
+  } else if (range === 'month') {
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, '0');
+    from = `${y}-${m}-01`;
+  }
+
+  const fromEl = document.getElementById('filterDateFrom');
+  const toEl   = document.getElementById('filterDateTo');
+  if (fromEl) fromEl.value = from || '';
+  if (toEl)   toEl.value   = to || '';
+
+  // Active state: chỉ toggle cho nhóm date quick buttons
+  const dateRanges = ['today', '7d', '30d', 'month'];
+  document.querySelectorAll('.filter-quick-btn[data-range]').forEach(b => {
+    if (dateRanges.includes(b.dataset.range)) {
+      b.classList.toggle('active', b === btn);
+    }
+  });
+
+  _updateApplyBtnLabel();
+}
+
+/**
+ * Quick pick orders range: lt50 / 50-100 / 100-200 / gt200
+ */
+export function quickPickOrders(range, btn) {
+  const minEl = document.getElementById('filterMinOrders');
+  const maxEl = document.getElementById('filterMaxOrders');
+
+  let min = null, max = null;
+  if (range === 'lt50')         { min = null; max = 49; }
+  else if (range === '50-100')  { min = 50;   max = 100; }
+  else if (range === '100-200') { min = 100;  max = 200; }
+  else if (range === 'gt200')   { min = 201;  max = null; }
+
+  if (minEl) minEl.value = min != null ? min : '';
+  if (maxEl) maxEl.value = max != null ? max : '';
+
+  const ordersRanges = ['lt50', '50-100', '100-200', 'gt200'];
+  document.querySelectorAll('.filter-quick-btn[data-range]').forEach(b => {
+    if (ordersRanges.includes(b.dataset.range)) {
+      b.classList.toggle('active', b === btn);
+    }
+  });
+
+  _updateApplyBtnLabel();
+}
+
+/**
+ * Toggle 1 chip loại đơn
+ */
+export function toggleFilterType(btn) {
+  if (!btn) return;
+  btn.classList.toggle('active');
+  _updateApplyBtnLabel();
+}
+
+/**
+ * Chọn 1 radio chip điểm (loại trừ lẫn nhau)
+ */
+export function pickFilterScore(score, btn) {
+  document.querySelectorAll('#filterScoreChips .filter-radio-chip').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  _updateApplyBtnLabel();
+}
+
+/**
+ * Reset form panel (CHƯA commit vào state)
+ */
+export function resetHistoryFilterPanel() {
+  const fromEl = document.getElementById('filterDateFrom');
+  const toEl   = document.getElementById('filterDateTo');
+  const minEl  = document.getElementById('filterMinOrders');
+  const maxEl  = document.getElementById('filterMaxOrders');
+
+  if (fromEl) fromEl.value = '';
+  if (toEl)   toEl.value   = '';
+  if (minEl)  minEl.value  = '';
+  if (maxEl)  maxEl.value  = '';
+
+  document.querySelectorAll('#filterTypeChips .filter-toggle-chip').forEach(b => b.classList.add('active'));
+  document.querySelectorAll('#filterScoreChips .filter-radio-chip').forEach(b => {
+    b.classList.toggle('active', b.dataset.score === 'all');
+  });
+  document.querySelectorAll('.filter-quick-btn[data-range]').forEach(b => b.classList.remove('active'));
+
+  _updateApplyBtnLabel();
+}
+
+/**
+ * Đọc DOM panel → commit vào _histFilters → render → đóng panel
+ */
+export function applyHistoryFilterPanel() {
+  const fromEl = document.getElementById('filterDateFrom');
+  const toEl   = document.getElementById('filterDateTo');
+  const minEl  = document.getElementById('filterMinOrders');
+  const maxEl  = document.getElementById('filterMaxOrders');
+
+  const types = { delivery: false, pickup: false, return: false };
+  document.querySelectorAll('#filterTypeChips .filter-toggle-chip.active').forEach(b => {
+    types[b.dataset.filterType] = true;
+  });
+
+  const scoreActive = document.querySelector('#filterScoreChips .filter-radio-chip.active');
+  const score = scoreActive ? scoreActive.dataset.score : 'all';
+
+  setHistFilters({
+    dateFrom: (fromEl && fromEl.value) ? fromEl.value : null,
+    dateTo:   (toEl   && toEl.value)   ? toEl.value   : null,
+    types,
+    minOrders: (minEl && minEl.value !== '') ? Number(minEl.value) : null,
+    maxOrders: (maxEl && maxEl.value !== '') ? Number(maxEl.value) : null,
+    scoreFilter: score
+  });
+
+  // Đồng bộ lại filter bar 4 nút cũ theo types mới
+  _syncFilterBarFromTypes(types);
+
+  renderHistory();
+  closeHistoryFilterPanel();
+}
+
+/**
+ * Xóa toàn bộ filter (từ chip summary)
+ */
+export function clearAllHistoryFilters() {
+  resetHistFilters();
+  state.histFilter = 'all';
+
+  // Đồng bộ filter bar 4 nút cũ về "Tất cả"
+  document.querySelectorAll('#tab-history .filter-bar .filter-btn').forEach(b => {
+    if (b.classList.contains('filter-btn-search')) return;
+    if (b.classList.contains('filter-btn-date')) return;
+    const isAllBtn = b.textContent.trim() === 'Tất cả';
+    b.classList.toggle('active', isAllBtn);
+  });
+
+  renderHistory();
+}
+
+/**
+ * Đồng bộ 4 nút filter bar cũ theo types object
+ */
+function _syncFilterBarFromTypes(types) {
+  const btns = document.querySelectorAll('#tab-history .filter-bar .filter-btn');
+  const onlyOne = (types.delivery && !types.pickup && !types.return) ? 'Giao'
+                : (!types.delivery && types.pickup && !types.return) ? 'Lấy'
+                : (!types.delivery && !types.pickup && types.return) ? 'Hoàn'
+                : null;
+
+  btns.forEach(b => {
+    if (b.classList.contains('filter-btn-search')) return;
+    if (b.classList.contains('filter-btn-date')) return;
+    const txt = b.textContent.trim();
+    if (onlyOne) {
+      b.classList.toggle('active', txt === onlyOne);
+    } else {
+      b.classList.toggle('active', txt === 'Tất cả');
+    }
+  });
+}
+
+// ---- Backward compat: 3 hàm cũ của v50.9.0 ----
 export function openHistoryDatePicker() {
-  // Nếu đang có filter ngày → bấm chip = bỏ filter (toggle)
-  if (getHistDateFilter()) {
-    setHistDateFilter(null);
-    renderHistory();
-    return;
-  }
-
-  const picker = document.getElementById('historyDatePickerInput');
-  if (!picker) return;
-
-  // Đặt giá trị mặc định = hôm nay hoặc max ngày trong state
-  picker.value = getTodayIso();
-
-  if (typeof picker.showPicker === 'function') {
-    try { picker.showPicker(); } catch { picker.click(); }
-  } else {
-    picker.click();
-  }
+  // Redirect sang panel filter nâng cao
+  openHistoryFilterPanel();
 }
 
 export function applyHistoryDateFilter(value) {
-  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    setHistDateFilter(null);
-  } else {
-    setHistDateFilter(value);
-  }
-  renderHistory();
+  // No-op — v50.11.0 đã thay bằng panel
 }
 
 export function clearHistoryDateFilter() {
-  setHistDateFilter(null);
-  renderHistory();
+  clearAllHistoryFilters();
 }
+// ================ /HISTORY FILTER ================
+
 
 // ================ PERIOD BAR ================
 export function setPeriodMode(mode, el) {
@@ -494,6 +779,81 @@ export function openMenuModal() {
 export function closeMenuModal() {
   document.getElementById('menuModal').classList.remove('active');
 }
+
+// ================ v50.11.0: SHARE TARGET MODAL (SPX-F) ================
+/**
+ * Detect trạng thái Share Target dựa vào platform + cài PWA
+ */
+function _detectShareTargetStatus() {
+  const ua = navigator.userAgent || '';
+  const isIOS = /iPad|iPhone|iPod/.test(ua)
+    || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const isAndroid = /Android/i.test(ua);
+
+  const isStandalone = window.matchMedia('(display-mode: standalone)').matches
+    || window.navigator.standalone === true
+    || window.matchMedia('(display-mode: fullscreen)').matches
+    || window.matchMedia('(display-mode: minimal-ui)').matches;
+
+  // Chưa cài PWA → chưa kích hoạt
+  if (!isStandalone) {
+    return {
+      type: 'inactive',
+      icon: '📲',
+      title: 'Chưa kích hoạt',
+      sub: 'Cần cài app vào màn hình chính để dùng tính năng Chia sẻ ảnh.'
+    };
+  }
+
+  // iOS → hỗ trợ hạn chế
+  if (isIOS) {
+    return {
+      type: 'limited',
+      icon: '⚠️',
+      title: 'iOS hỗ trợ hạn chế',
+      sub: 'iOS Safari 17+ chỉ nhận 1 ảnh/lần — không nhận nhiều ảnh cùng lúc.'
+    };
+  }
+
+  // Android đã cài PWA → full support
+  if (isAndroid) {
+    return {
+      type: 'active',
+      icon: '✅',
+      title: 'Đã kích hoạt',
+      sub: 'Android Chrome hỗ trợ đầy đủ — share nhiều ảnh cùng lúc.'
+    };
+  }
+
+  // Desktop hoặc khác
+  return {
+    type: 'inactive',
+    icon: '💻',
+    title: 'Không hỗ trợ trên desktop',
+    sub: 'Tính năng này chỉ hoạt động trên mobile (Android/iOS).'
+  };
+}
+
+export function openShareTargetModal() {
+  const status = _detectShareTargetStatus();
+
+  const box   = document.getElementById('shareStatusBox');
+  const icon  = document.getElementById('shareStatusIcon');
+  const title = document.getElementById('shareStatusTitle');
+  const sub   = document.getElementById('shareStatusSub');
+
+  if (box)   box.className = 'share-status-box share-status-' + status.type;
+  if (icon)  icon.innerText  = status.icon;
+  if (title) title.innerText = status.title;
+  if (sub)   sub.innerText   = status.sub;
+
+  document.getElementById('shareTargetModal').classList.add('active');
+}
+
+export function closeShareTargetModal() {
+  document.getElementById('shareTargetModal').classList.remove('active');
+}
+// ================ /SHARE TARGET MODAL ================
 
 // ================ SETTINGS MODAL ================
 export function openSettingsModal() {
