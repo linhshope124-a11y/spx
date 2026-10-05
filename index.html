@@ -244,6 +244,22 @@
                 <span class="income-unit">đ/tháng</span>
               </div>
             </div>
+
+            <!-- v50.11.0: Banner điều kiện Tài xế (≥ 1500 đơn Giao) -->
+            <div class="taixe-condition-banner" id="taixeConditionBanner" style="display:none">
+              <div class="taixe-banner-head">
+                <span class="taixe-banner-icon" id="taixeBannerIcon">⚠️</span>
+                <span class="taixe-banner-title" id="taixeBannerTitle">Chưa đủ điều kiện cộng Tài xế</span>
+              </div>
+              <div class="taixe-banner-progress-text" id="taixeProgressText">
+                Đơn Giao: 388/1,500
+              </div>
+              <div class="taixe-banner-progress-bar">
+                <div class="taixe-banner-progress-fill" id="taixeProgressFill"></div>
+              </div>
+              <div class="taixe-banner-sub" id="taixeBannerSub">Còn thiếu 1,112 đơn</div>
+            </div>
+
             <div class="income-summary-box">
               <div class="income-summary-line">
                 <span>Lương 1 công</span>
@@ -391,8 +407,19 @@
             <button class="filter-btn" onclick="setHistFilter('delivery', this)">Giao</button>
             <button class="filter-btn" onclick="setHistFilter('pickup', this)">Lấy</button>
             <button class="filter-btn" onclick="setHistFilter('return', this)">Hoàn</button>
-            <button class="filter-btn filter-btn-date" id="histDateChip" onclick="openHistoryDatePicker()">📅 Ngày</button>
+            <!-- v50.11.0: Chip filter nâng cao (thay 📅 Ngày) -->
+            <button class="filter-btn filter-btn-search" id="histFilterChip" onclick="openHistoryFilterPanel()">🔍 Lọc</button>
           </div>
+
+          <!-- v50.11.0: Chip summary khi filter active -->
+          <div class="hist-filter-summary" id="histFilterSummary" style="display:none">
+            <div class="hist-filter-summary-head">
+              <span class="hist-filter-summary-count" id="histFilterSummaryCount">🔍 0 filter đang bật</span>
+              <button class="hist-filter-summary-clear" onclick="clearAllHistoryFilters()">✕ Xóa</button>
+            </div>
+            <div class="hist-filter-summary-chips" id="histFilterSummaryChips"></div>
+          </div>
+
           <div id="historyEntries"></div>
         </section>
       </main>
@@ -523,6 +550,21 @@
         <div class="menu-text">
           <div class="menu-title">Nhập sản lượng</div>
           <div class="menu-sub">Nhập tay theo 8 dải khối lượng</div>
+        </div>
+      </button>
+
+      <!-- v50.11.0: SPX-F — Menu item Chia sẻ ảnh -->
+      <button class="menu-item" onclick="closeMenuModal();openShareTargetModal()">
+        <span class="menu-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/>
+            <polyline points="16 6 12 2 8 6"/>
+            <line x1="12" y1="2" x2="12" y2="15"/>
+          </svg>
+        </span>
+        <div class="menu-text">
+          <div class="menu-title">📤 Chia sẻ ảnh</div>
+          <div class="menu-sub">Share từ Gallery → OCR tự động</div>
         </div>
       </button>
 
@@ -818,6 +860,147 @@
     </div>
     <div class="modal-box-foot">
       <button class="btn" onclick="closeCoffeeModal()" style="width:100%">Đóng</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ v50.11.0: SPX-F SHARE TARGET MODAL ============ -->
+<div class="modal-shade" id="shareTargetModal" onclick="if(event.target===this)closeShareTargetModal()">
+  <div class="modal-box">
+    <div class="modal-box-head">
+      <h3>📤 Chia sẻ ảnh vào app</h3>
+      <button class="modal-close-btn" onclick="closeShareTargetModal()" aria-label="Đóng">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <line x1="18" y1="6" x2="6" y2="18"/>
+          <line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+    </div>
+    <div class="modal-body">
+
+      <!-- Status tự detect -->
+      <div class="share-status-box" id="shareStatusBox">
+        <span class="share-status-icon" id="shareStatusIcon">⏳</span>
+        <div class="share-status-text">
+          <div class="share-status-title" id="shareStatusTitle">Đang kiểm tra...</div>
+          <div class="share-status-sub" id="shareStatusSub"></div>
+        </div>
+      </div>
+
+      <div class="share-intro">
+        Sau khi cài app, bạn có thể <b>share ảnh chụp màn hình SPX</b> trực tiếp từ Gallery vào app — OCR sẽ tự chạy, không cần mở app rồi chọn ảnh lại.
+      </div>
+
+      <div class="share-steps">
+        <div class="share-step">
+          <div class="share-step-num">1</div>
+          <div class="share-step-text">Cài app vào màn hình chính <span class="share-step-hint">(Chrome → ⋮ → "Thêm vào màn hình chính")</span></div>
+        </div>
+        <div class="share-step">
+          <div class="share-step-num">2</div>
+          <div class="share-step-text">Mở app <b>SPX</b> → chụp màn hình báo cáo sản lượng ngày hôm trước</div>
+        </div>
+        <div class="share-step">
+          <div class="share-step-num">3</div>
+          <div class="share-step-text">Mở <b>Gallery / Ảnh</b> → chọn ảnh vừa chụp</div>
+        </div>
+        <div class="share-step">
+          <div class="share-step-num">4</div>
+          <div class="share-step-text">Bấm <b>Chia sẻ (Share)</b> → chọn <b>SPX Tracker</b> trong danh sách</div>
+        </div>
+        <div class="share-step">
+          <div class="share-step-num">5</div>
+          <div class="share-step-text">App tự mở + tự OCR ngay 🎉 <span class="share-step-hint">Không cần chọn ảnh lại</span></div>
+        </div>
+      </div>
+
+      <div class="share-note">
+        <div class="share-note-title">💡 Lưu ý tương thích</div>
+        <div class="share-note-row"><span class="share-note-badge ok">OK</span> Android Chrome — hỗ trợ đầy đủ, share nhiều ảnh cùng lúc</div>
+        <div class="share-note-row"><span class="share-note-badge warn">LIMIT</span> iOS Safari 17+ — hỗ trợ <b>hạn chế</b>, chỉ 1 ảnh/lần</div>
+        <div class="share-note-row"><span class="share-note-badge warn">N/A</span> Desktop — chưa hỗ trợ share_target</div>
+        <div class="share-note-row"><span class="share-note-badge req">PWA</span> Chỉ hoạt động khi app đã <b>cài</b> vào màn hình chính</div>
+      </div>
+
+    </div>
+    <div class="modal-box-foot">
+      <button class="btn btn-primary" onclick="closeShareTargetModal()" style="width:100%">Đã hiểu</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ v50.11.0: SPX-H FILTER PANEL (BOTTOM SHEET) ============ -->
+<div class="modal-shade filter-panel-shade" id="historyFilterPanel" onclick="if(event.target===this)closeHistoryFilterPanel()">
+  <div class="filter-panel-box">
+    <div class="filter-panel-head">
+      <h3>🔍 Lọc nhật ký</h3>
+      <button class="modal-close-btn" onclick="closeHistoryFilterPanel()" aria-label="Đóng">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <line x1="18" y1="6" x2="6" y2="18"/>
+          <line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+    </div>
+
+    <div class="filter-panel-body">
+
+      <!-- Section 1: Thời gian -->
+      <div class="filter-section">
+        <div class="filter-section-title">📅 Thời gian</div>
+        <div class="filter-range-row">
+          <input type="date" id="filterDateFrom" class="input-control filter-date-input">
+          <span class="filter-range-sep">→</span>
+          <input type="date" id="filterDateTo" class="input-control filter-date-input">
+        </div>
+        <div class="filter-quick-row">
+          <button type="button" class="filter-quick-btn" data-range="today" onclick="quickPickDateRange('today', this)">Hôm nay</button>
+          <button type="button" class="filter-quick-btn" data-range="7d" onclick="quickPickDateRange('7d', this)">7 ngày</button>
+          <button type="button" class="filter-quick-btn" data-range="30d" onclick="quickPickDateRange('30d', this)">30 ngày</button>
+          <button type="button" class="filter-quick-btn" data-range="month" onclick="quickPickDateRange('month', this)">Tháng này</button>
+        </div>
+      </div>
+
+      <!-- Section 2: Loại đơn -->
+      <div class="filter-section">
+        <div class="filter-section-title">📦 Loại đơn</div>
+        <div class="filter-chip-row" id="filterTypeChips">
+          <button type="button" class="filter-toggle-chip active" data-filter-type="delivery" onclick="toggleFilterType(this)">Giao</button>
+          <button type="button" class="filter-toggle-chip active" data-filter-type="pickup" onclick="toggleFilterType(this)">Lấy</button>
+          <button type="button" class="filter-toggle-chip active" data-filter-type="return" onclick="toggleFilterType(this)">Hoàn</button>
+        </div>
+      </div>
+
+      <!-- Section 3: SL đơn -->
+      <div class="filter-section">
+        <div class="filter-section-title">🔢 Số lượng đơn</div>
+        <div class="filter-range-row">
+          <input type="number" inputmode="numeric" id="filterMinOrders" class="input-control filter-num-input" placeholder="Min" min="0">
+          <span class="filter-range-sep">→</span>
+          <input type="number" inputmode="numeric" id="filterMaxOrders" class="input-control filter-num-input" placeholder="Max" min="0">
+        </div>
+        <div class="filter-quick-row">
+          <button type="button" class="filter-quick-btn" data-range="lt50" onclick="quickPickOrders('lt50', this)">&lt;50</button>
+          <button type="button" class="filter-quick-btn" data-range="50-100" onclick="quickPickOrders('50-100', this)">50-100</button>
+          <button type="button" class="filter-quick-btn" data-range="100-200" onclick="quickPickOrders('100-200', this)">100-200</button>
+          <button type="button" class="filter-quick-btn" data-range="gt200" onclick="quickPickOrders('gt200', this)">&gt;200</button>
+        </div>
+      </div>
+
+      <!-- Section 4: Điểm -->
+      <div class="filter-section">
+        <div class="filter-section-title">🎯 Trạng thái điểm</div>
+        <div class="filter-chip-row" id="filterScoreChips">
+          <button type="button" class="filter-radio-chip active" data-score="all" onclick="pickFilterScore('all', this)">Tất cả</button>
+          <button type="button" class="filter-radio-chip" data-score="met" onclick="pickFilterScore('met', this)">Đạt mốc</button>
+          <button type="button" class="filter-radio-chip" data-score="notmet" onclick="pickFilterScore('notmet', this)">Chưa mốc</button>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="filter-panel-foot">
+      <button class="btn" onclick="resetHistoryFilterPanel()">🔄 Đặt lại</button>
+      <button class="btn btn-primary" id="applyFilterBtn" onclick="applyHistoryFilterPanel()">✨ Áp dụng</button>
     </div>
   </div>
 </div>
