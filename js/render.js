@@ -6,14 +6,164 @@ import { formatPts, formatDateDisplay, _fmt, getCurrentMonthIso, getTodayIso } f
 const NEED_HIGHLIGHT = 'color:#dc2626;font-size:1.35em;font-weight:900;letter-spacing:0.5px;';
 
 let _lastDataHash = null;
-let _histDateFilter = null;   // v50.9.0: filter Nhật ký theo ngày
 
-// ==================== v50.9.0: HISTORY DATE FILTER ====================
-export function getHistDateFilter() { return _histDateFilter; }
+// ==================== v50.11.0: SPX-H HISTORY FILTERS ====================
+const DEFAULT_HIST_FILTERS = {
+  dateFrom: null,
+  dateTo: null,
+  types: { delivery: true, pickup: true, return: true },
+  minOrders: null,
+  maxOrders: null,
+  scoreFilter: 'all'
+};
 
-export function setHistDateFilter(v) {
-  _histDateFilter = (v && /^\d{4}-\d{2}-\d{2}$/.test(v)) ? v : null;
+let _histFilters = {
+  ...DEFAULT_HIST_FILTERS,
+  types: { ...DEFAULT_HIST_FILTERS.types }
+};
+
+/**
+ * Trả về bản copy filter hiện tại (không expose reference)
+ */
+export function getHistFilters() {
+  return {
+    ..._histFilters,
+    types: { ..._histFilters.types }
+  };
 }
+
+/**
+ * Merge partial filter — không overwrite toàn bộ object
+ */
+export function setHistFilters(partial) {
+  if (!partial || typeof partial !== 'object') return;
+
+  if ('dateFrom' in partial) {
+    _histFilters.dateFrom = partial.dateFrom && /^\d{4}-\d{2}-\d{2}$/.test(partial.dateFrom)
+      ? partial.dateFrom : null;
+  }
+  if ('dateTo' in partial) {
+    _histFilters.dateTo = partial.dateTo && /^\d{4}-\d{2}-\d{2}$/.test(partial.dateTo)
+      ? partial.dateTo : null;
+  }
+  if ('types' in partial && partial.types) {
+    _histFilters.types = {
+      delivery: partial.types.delivery !== false,
+      pickup:   partial.types.pickup   !== false,
+      return:   partial.types.return   !== false
+    };
+  }
+  if ('minOrders' in partial) {
+    const v = partial.minOrders;
+    _histFilters.minOrders = (v === null || v === '' || v === undefined || isNaN(Number(v)))
+      ? null : Math.max(0, Number(v));
+  }
+  if ('maxOrders' in partial) {
+    const v = partial.maxOrders;
+    _histFilters.maxOrders = (v === null || v === '' || v === undefined || isNaN(Number(v)))
+      ? null : Math.max(0, Number(v));
+  }
+  if ('scoreFilter' in partial) {
+    const s = partial.scoreFilter;
+    _histFilters.scoreFilter = (s === 'met' || s === 'notmet') ? s : 'all';
+  }
+}
+
+export function resetHistFilters() {
+  _histFilters = {
+    ...DEFAULT_HIST_FILTERS,
+    types: { ...DEFAULT_HIST_FILTERS.types }
+  };
+}
+
+export function hasActiveHistFilters() {
+  if (_histFilters.dateFrom || _histFilters.dateTo) return true;
+  const t = _histFilters.types;
+  if (!t.delivery || !t.pickup || !t.return) return true;
+  if (_histFilters.minOrders != null) return true;
+  if (_histFilters.maxOrders != null) return true;
+  if (_histFilters.scoreFilter !== 'all') return true;
+  return false;
+}
+
+export function countActiveHistFilters() {
+  let n = 0;
+  if (_histFilters.dateFrom || _histFilters.dateTo) n++;
+  const t = _histFilters.types;
+  if (!t.delivery || !t.pickup || !t.return) n++;
+  if (_histFilters.minOrders != null || _histFilters.maxOrders != null) n++;
+  if (_histFilters.scoreFilter !== 'all') n++;
+  return n;
+}
+
+// Backward compat (v50.9.0 API cũ)
+export function getHistDateFilter() {
+  if (_histFilters.dateFrom && _histFilters.dateFrom === _histFilters.dateTo) {
+    return _histFilters.dateFrom;
+  }
+  return null;
+}
+export function setHistDateFilter(v) {
+  if (v && /^\d{4}-\d{2}-\d{2}$/.test(v)) {
+    _histFilters.dateFrom = v;
+    _histFilters.dateTo = v;
+  } else {
+    _histFilters.dateFrom = null;
+    _histFilters.dateTo = null;
+  }
+}
+
+/**
+ * Kiểm tra record có điểm > 0 không (đạt mốc đầu tiên ở bất kỳ dải nào)
+ */
+function recordHasPoint(r, type) {
+  const tableData = type === 'delivery' ? TABLE_5_DATA
+                  : type === 'pickup'   ? TABLE_4_DATA
+                  : TABLE_6_DATA;
+  for (let i = 0; i < WEIGHT_KEYS.length; i++) {
+    const orders = parseInt(r.weights[WEIGHT_KEYS[i]], 10) || 0;
+    const tier = lookupTier(orders, i, tableData);
+    if (tier.matched.pt > 0) return true;
+  }
+  return false;
+}
+
+/**
+ * Áp dụng filter nâng cao cho 1 record
+ */
+function recordPassesFilters(r, type) {
+  // 1) Type filter
+  if (!_histFilters.types[type]) return false;
+
+  // 2) Date filter (nếu có → không áp dụng period; nếu không → dùng period)
+  const hasDateFilter = _histFilters.dateFrom || _histFilters.dateTo;
+  if (!hasDateFilter) {
+    if (!isDateInCurrentPeriod(r.date, state.periodMode, state.currentMonth, state.currentDate)) {
+      return false;
+    }
+  } else {
+    if (_histFilters.dateFrom && r.date < _histFilters.dateFrom) return false;
+    if (_histFilters.dateTo   && r.date > _histFilters.dateTo)   return false;
+  }
+
+  // 3) Orders range filter
+  const dayTotal = WEIGHT_KEYS.reduce(
+    (s, k) => s + (parseInt(r.weights[k], 10) || 0), 0
+  );
+  if (_histFilters.minOrders != null && dayTotal < _histFilters.minOrders) return false;
+  if (_histFilters.maxOrders != null && dayTotal > _histFilters.maxOrders) return false;
+
+  // 4) Score filter
+  if (_histFilters.scoreFilter !== 'all') {
+    const has = recordHasPoint(r, type);
+    if (_histFilters.scoreFilter === 'met'    && !has) return false;
+    if (_histFilters.scoreFilter === 'notmet' &&  has) return false;
+  }
+
+  return true;
+}
+// ==================== /SPX-H HISTORY FILTERS ====================
+
 
 // ==================== v50.9.0: REMINDER BANNER ====================
 function computeMissedDays() {
@@ -161,6 +311,64 @@ function updateHeroContextLabel() {
   el.innerText = `Tháng ${parseInt(m, 10)}/${y}`;
 }
 
+// ==================== v50.11.0: TÀI XẾ CONDITION BANNER ====================
+const TAIXE_ORDER_THRESHOLD = 1500;
+
+/**
+ * Render banner điều kiện cộng Tài xế dưới input Tài xế
+ * @param {number} delOrders - Tổng đơn Giao của THÁNG đang xem
+ * @param {number} taiXeAmount - Số tiền Tài xế đã nhập (VNĐ)
+ */
+function renderTaiXeConditionBanner(delOrders, taiXeAmount) {
+  const banner = document.getElementById('taixeConditionBanner');
+  if (!banner) return;
+
+  const amt = Number(taiXeAmount) || 0;
+  // Rule: Input Tài xế = 0 → không hiện banner
+  if (amt === 0) {
+    banner.style.display = 'none';
+    return;
+  }
+
+  const orders = Number(delOrders) || 0;
+  const isMet = orders >= TAIXE_ORDER_THRESHOLD;
+  const pct = Math.min(100, (orders / TAIXE_ORDER_THRESHOLD) * 100);
+  const pctStr = pct.toFixed(1);
+
+  banner.className = 'taixe-condition-banner ' + (isMet ? 'taixe-state-success' : 'taixe-state-warning');
+
+  const icon = document.getElementById('taixeBannerIcon');
+  const title = document.getElementById('taixeBannerTitle');
+  const progressText = document.getElementById('taixeProgressText');
+  const progressFill = document.getElementById('taixeProgressFill');
+  const sub = document.getElementById('taixeBannerSub');
+
+  if (icon) icon.innerText = isMet ? '✅' : '⚠️';
+  if (title) title.innerText = isMet
+    ? 'Đã đủ điều kiện cộng Tài xế'
+    : 'Chưa đủ điều kiện cộng Tài xế';
+
+  if (progressText) {
+    progressText.innerText = `Đơn Giao: ${_fmt(orders)}/${_fmt(TAIXE_ORDER_THRESHOLD)}`;
+  }
+  if (progressFill) {
+    progressFill.style.width = pct + '%';
+  }
+  if (sub) {
+    if (isMet) {
+      sub.innerText = `${pctStr}% — sẽ cộng ${_fmt(amt)}đ vào lương tháng này`;
+    } else {
+      const missing = TAIXE_ORDER_THRESHOLD - orders;
+      sub.innerText = `Còn thiếu ${_fmt(missing)} đơn — chưa cộng Tài xế`;
+    }
+  }
+
+  banner.style.display = 'block';
+}
+// ==================== /TÀI XẾ CONDITION BANNER ====================
+
+
+// ==================== RENDER ROWS & SUGGESTIONS ====================
 function renderRow(weightLabel, orders, tier, typeClass) {
   const shortLabel = weightLabel.replace(/\s+/g, '').replace('kg', '');
 
@@ -204,6 +412,7 @@ function buildOverviewSuggestion(type, label, orders, tier) {
   </div>`;
 }
 
+// ==================== UPDATE ALL VIEWS ====================
 function _updateAllViews() {
   const { agg, total } = aggregateWeights(
     state.appData,
@@ -258,7 +467,13 @@ function _updateAllViews() {
   const salaryBase   = salaryCfg.base;
   const manualBuuCuc = salaryCfg.buuCuc;
   const manualTaiXe  = salaryCfg.taiXe;
-  const monthlyTotal = salaryBase + manualBuuCuc + manualTaiXe;
+
+  // ===== v50.11.0: BUSINESS RULE — Tài xế CHỈ cộng khi đơn Giao ≥ 1500/tháng =====
+  const delOrders = total.del;
+  let monthlyTotal = salaryBase + manualBuuCuc;
+  if (delOrders >= TAIXE_ORDER_THRESHOLD) {
+    monthlyTotal += manualTaiXe;
+  }
 
   const perDay = salaryDays > 0 ? monthlyTotal / salaryDays : 0;
   const incomeAccumulated = Math.round(perDay * displayDays);
@@ -307,7 +522,6 @@ function _updateAllViews() {
     heroTileRetEl.classList.toggle('is-zero', total.ret === 0);
   }
 
-  // Hero tab chi tiết
   document.getElementById('delTotalPoints').innerHTML =
     `${_fmt(delPts)} <span class="hero-value-unit">Điểm</span>`;
   document.getElementById('delTotalOrders').innerText = `${_fmt(total.del)} đơn`;
@@ -398,6 +612,9 @@ function _updateAllViews() {
     progressFill.style.width = pct + '%';
   }
 
+  // ===== v50.11.0: Banner Tài xế =====
+  renderTaiXeConditionBanner(delOrders, manualTaiXe);
+
   // ===== Count bản ghi =====
   const filteredCount =
     state.appData.delivery.filter(r => isDateInCurrentPeriod(r.date, state.periodMode, state.currentMonth, state.currentDate)).length +
@@ -407,7 +624,6 @@ function _updateAllViews() {
 
   persistData();
 
-  // ===== v50.9.0: Reminder banner =====
   renderReminderBanner();
 
   const currentHash = JSON.stringify(state.appData);
@@ -432,45 +648,105 @@ export function updateAllViews() {
   _updateAllViews_debounced();
 }
 
-// ==================== v50.9.0: RENDER HISTORY (có filter ngày) ====================
+// ==================== v50.11.0: UPDATE CHIP SUMMARY (SPX-H) ====================
+function updateHistFilterSummaryUI() {
+  const summary = document.getElementById('histFilterSummary');
+  const chipsBox = document.getElementById('histFilterSummaryChips');
+  const countLabel = document.getElementById('histFilterSummaryCount');
+  const chipBtn = document.getElementById('histFilterChip');
+
+  if (!summary) return;
+
+  if (!hasActiveHistFilters()) {
+    summary.style.display = 'none';
+    if (chipBtn) chipBtn.classList.remove('active');
+    return;
+  }
+
+  summary.style.display = 'block';
+  if (chipBtn) chipBtn.classList.add('active');
+
+  const n = countActiveHistFilters();
+  if (countLabel) countLabel.innerText = `🔍 ${n} filter đang bật`;
+
+  const chips = [];
+
+  // 📅 Date range
+  if (_histFilters.dateFrom || _histFilters.dateTo) {
+    if (_histFilters.dateFrom && _histFilters.dateTo) {
+      chips.push(`📅 ${formatDateDisplay(_histFilters.dateFrom)} → ${formatDateDisplay(_histFilters.dateTo)}`);
+    } else if (_histFilters.dateFrom) {
+      chips.push(`📅 từ ${formatDateDisplay(_histFilters.dateFrom)}`);
+    } else {
+      chips.push(`📅 đến ${formatDateDisplay(_histFilters.dateTo)}`);
+    }
+  }
+
+  // 📦 Types
+  const t = _histFilters.types;
+  const activeTypes = [];
+  if (t.delivery) activeTypes.push('Giao');
+  if (t.pickup)   activeTypes.push('Lấy');
+  if (t.return)   activeTypes.push('Hoàn');
+  if (activeTypes.length < 3) {
+    chips.push(`📦 ${activeTypes.length === 0 ? 'Không loại nào' : activeTypes.join(' + ')}`);
+  }
+
+  // 🔢 Orders
+  if (_histFilters.minOrders != null || _histFilters.maxOrders != null) {
+    if (_histFilters.minOrders != null && _histFilters.maxOrders != null) {
+      chips.push(`🔢 ${_fmt(_histFilters.minOrders)} - ${_fmt(_histFilters.maxOrders)} đơn`);
+    } else if (_histFilters.minOrders != null) {
+      chips.push(`🔢 ≥ ${_fmt(_histFilters.minOrders)} đơn`);
+    } else {
+      chips.push(`🔢 ≤ ${_fmt(_histFilters.maxOrders)} đơn`);
+    }
+  }
+
+  // 🎯 Score
+  if (_histFilters.scoreFilter !== 'all') {
+    chips.push(`🎯 ${_histFilters.scoreFilter === 'met' ? 'Đạt mốc' : 'Chưa mốc'}`);
+  }
+
+  if (chipsBox) {
+    chipsBox.innerHTML = chips
+      .map(c => `<span class="hist-filter-chip">${c}</span>`)
+      .join('');
+  }
+}
+
+// ==================== RENDER HISTORY ====================
 export function renderHistory() {
   const container = document.getElementById('historyEntries');
   if (!container) return;
   const prevScroll = container.scrollTop;
   container.innerHTML = '';
 
-  // Update chip label
-  const chip = document.getElementById('histDateChip');
+  // v50.11.0: chip Lọc active state
+  const chip = document.getElementById('histFilterChip');
   if (chip) {
-    if (_histDateFilter) {
-      chip.innerText = '📅 ' + formatDateDisplay(_histDateFilter) + ' ✕';
-      chip.classList.add('active');
-    } else {
-      chip.innerText = '📅 Ngày';
-      chip.classList.remove('active');
-    }
+    chip.classList.toggle('active', hasActiveHistFilters());
   }
 
+  // v50.11.0: chip summary
+  updateHistFilterSummaryUI();
+
+  // Gom list theo filter nâng cao
   let list = [];
-  if (state.histFilter === 'all' || state.histFilter === 'delivery')
-    state.appData.delivery.forEach(r => list.push({ ...r, type: 'delivery' }));
-  if (state.histFilter === 'all' || state.histFilter === 'pickup')
-    state.appData.pickup.forEach(r => list.push({ ...r, type: 'pickup' }));
-  if (state.histFilter === 'all' || state.histFilter === 'return')
-    state.appData.return.forEach(r => list.push({ ...r, type: 'return' }));
-
-  // v50.9.0: filter theo ngày (nếu có) — bỏ qua filter theo tháng
-  if (_histDateFilter) {
-    list = list.filter(r => r.date === _histDateFilter);
-  } else {
-    list = list.filter(r => isDateInCurrentPeriod(r.date, state.periodMode, state.currentMonth, state.currentDate));
-  }
+  ['delivery', 'pickup', 'return'].forEach(type => {
+    if (!_histFilters.types[type]) return;
+    state.appData[type].forEach(r => {
+      if (recordPassesFilters(r, type)) {
+        list.push({ ...r, type });
+      }
+    });
+  });
 
   list.sort((a, b) => (b.date > a.date ? 1 : b.date < a.date ? -1 : b.id - a.id));
 
   if (list.length === 0) {
-    const emptyMsg = _histDateFilter
-      ? `Không có bản ghi ngày ${formatDateDisplay(_histDateFilter)}`
+    const emptyMsg = hasActiveHistFilters()
+      ? 'Không có bản ghi khớp bộ lọc hiện tại.'
       : 'Chưa có bản ghi nào trong kỳ được chọn.';
     container.innerHTML = `<div style="font-size:11.5px;color:var(--text-3);text-align:center;padding:20px">${emptyMsg}</div>`;
     return;
