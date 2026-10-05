@@ -1,3 +1,8 @@
+// =============================================================
+// OCR ENGINE v2 — PART 1/3
+// Config · AbortController · Worker · Cache
+// =============================================================
+
 import { state } from './state.js';
 import { WEIGHT_KEYS } from './config.js';
 import { getTodayIso, formatDateDisplay, generateId } from './utils.js';
@@ -5,33 +10,79 @@ import { openAddModal, openEditModal, switchModalSubTab, showToast } from './ui.
 import { updateAllViews } from './render.js';
 import { showAlert, showConfirm } from './dialog.js';
 
-// ==================== UNDO LOADER ====================
-let _pushUndoFn = null;
-let _pushUndoLoading = null;
+// ==================== CONFIG ====================
+const OCR_CACHE_VERSION = 'v2';        // bump khi đổi parser
+const OCR_TIMEOUT_MS    = 30000;        // 30s cho 1 lần recognize
+const OCR_CACHE_MAX     = 200;
+const LS_CACHE_PREFIX   = 'spx_ocr_cache_';
+const LS_CACHE_INDEX    = 'spx_ocr_cache_index';
+const LS_CACHE_MAX_BYTES = 4 * 1024 * 1024;
 
-async function ensurePushUndo() {
-  if (_pushUndoFn) return _pushUndoFn;
-  if (_pushUndoLoading) return _pushUndoLoading;
-  _pushUndoLoading = (async () => {
-    try {
-      const mod = await import('./undo.js');
-      _pushUndoFn = mod.pushUndo || null;
-      return _pushUndoFn;
-    } catch (e) {
-      console.warn('[OCR] Không load được undo.js:', e);
-      return null;
-    }
-  })();
-  return _pushUndoLoading;
+// Score thresholds
+const SCORE_AUTO_SAVE = 92;
+const SCORE_REVIEW    = 85;
+const SCORE_MAX_CHECKSUM_FAIL = 84;    // cap khi checksum fail → vào Manual
+
+// ==================== 8 DẢI KHỐI LƯỢNG SPX ====================
+// Format thật từ ảnh: "0.000 - 2.001", "15.001 - 999999.000"
+const SPX_RANGES = [
+  { key: '0_2',     min: 0,  max: 2,      display: '0.000 - 2.001' },
+  { key: '2_4',     min: 2,  max: 4,      display: '2.001 - 4.001' },
+  { key: '4_6',     min: 4,  max: 6,      display: '4.001 - 6.001' },
+  { key: '6_8',     min: 6,  max: 8,      display: '6.001 - 8.001' },
+  { key: '8_10',    min: 8,  max: 10,     display: '8.001 - 10.001' },
+  { key: '10_12',   min: 10, max: 12,     display: '10.001 - 12.001' },
+  { key: '12_15',   min: 12, max: 15,     display: '12.001 - 15.001' },
+  { key: 'over_15', min: 15, max: 999999, display: '15.001 - 999999.000' }
+];
+
+// Map giá trị min (int) → key dải
+const RANGE_KEY_BY_MIN = {
+  0: '0_2',   2: '2_4',    4: '4_6',    6: '6_8',
+  8: '8_10',  10: '10_12', 12: '12_15', 15: 'over_15'
+};
+
+// ==================== ABORT CONTROLLER ====================
+let _ocrAbortController = null;
+
+export function cancelOcr() {
+  if (_ocrAbortController) {
+    _ocrAbortController.abort();
+    _ocrAbortController = null;
+    return true;
+  }
+  return false;
+}
+
+function _newAbortController() {
+  _ocrAbortController = new AbortController();
+  return _ocrAbortController;
+}
+
+function _checkAborted(signal) {
+  if (signal && signal.aborted) {
+    throw new Error('OCR_CANCELLED');
+  }
+}
+
+function _clearAbortController(ctrl) {
+  if (_ocrAbortController === ctrl) {
+    _ocrAbortController = null;
+  }
 }
 
 // ==================== TESSERACT WORKER ====================
 let cachedTesseractWorker = null;
-let workerLoadingPromise = null;
+let workerLoadingPromise  = null;
 
+/**
+ * Khởi tạo worker (cache lại, tái sử dụng cho mọi ảnh)
+ * Tesseract v5 tự load asset từ CDN jsdelivr (theo script trong index.html)
+ */
 async function getTesseractWorker() {
   if (cachedTesseractWorker) return cachedTesseractWorker;
-  if (workerLoadingPromise) return workerLoadingPromise;
+  if (workerLoadingPromise)  return workerLoadingPromise;
+
   workerLoadingPromise = (async () => {
     const worker = await Tesseract.createWorker('vie', 1, {
       logger: m => {
@@ -42,347 +93,111 @@ async function getTesseractWorker() {
         let text = '';
         if (m.status === 'loading tesseract core')            text = 'Đang tải engine...';
         else if (m.status === 'initializing tesseract')       text = 'Đang khởi tạo...';
-        else if (m.status === 'loading language traineddata') text = `Đang tải tiếng Việt ${Math.round((m.progress || 0) * 100)}%...`;
+        else if (m.status === 'loading language traineddata') text = `Đang tải tiếng Việt ${Math.round((m.progress||0)*100)}%...`;
         else if (m.status === 'initializing api')             text = 'Đang chuẩn bị API...';
-        else if (m.status === 'recognizing text')             text = `Đang nhận diện... ${Math.round((m.progress || 0) * 100)}%`;
+        else if (m.status === 'recognizing text')             text = `Đang nhận diện... ${Math.round((m.progress||0)*100)}%`;
         if (text) desc.innerText = text;
       }
     });
+
     await worker.setParameters({
       tessedit_pageseg_mode: Tesseract.PSM.SINGLE_BLOCK,
       preserve_interword_spaces: '1',
       tessedit_do_invert: '0'
     });
+
     cachedTesseractWorker = worker;
     return worker;
   })();
-  try { return await workerLoadingPromise; }
-  catch (e) { workerLoadingPromise = null; throw e; }
+
+  try {
+    return await workerLoadingPromise;
+  } catch (e) {
+    workerLoadingPromise = null;
+    throw e;
+  }
+}
+
+/**
+ * Reset worker — dùng khi worker crash / lỗi không hồi phục
+ */
+async function resetTesseractWorker() {
+  if (cachedTesseractWorker) {
+    try { await cachedTesseractWorker.terminate(); } catch {}
+  }
+  cachedTesseractWorker = null;
+  workerLoadingPromise  = null;
 }
 
 export async function preloadTesseractWorker() {
-  try { await getTesseractWorker(); console.log('[OCR] Worker sẵn sàng'); }
-  catch (e) { console.warn('[OCR] Preload thất bại:', e); }
+  try {
+    await getTesseractWorker();
+    console.log('[OCR] Worker sẵn sàng');
+  } catch (e) {
+    console.warn('[OCR] Preload thất bại:', e);
+  }
 }
 
-// ==================== HELPERS ====================
-function readFileAsDataURL(file) {
+// ==================== TIMEOUT WRAPPER ====================
+function withTimeout(promise, ms, signal) {
   return new Promise((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = e => resolve(e.target.result);
-    r.onerror = () => reject(new Error('Không đọc được file'));
-    r.readAsDataURL(file);
-  });
-}
-
-function makeThumbnail(dataUrl, maxW = 96) {
-  return new Promise(resolve => {
-    const img = new Image();
-    img.onload = () => {
-      try {
-        const scale  = Math.min(1, maxW / img.width);
-        const canvas = document.createElement('canvas');
-        canvas.width  = Math.floor(img.width * scale);
-        canvas.height = Math.floor(img.height * scale);
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        resolve(canvas.toDataURL('image/jpeg', 0.65));
-      } catch { resolve(''); }
+    const timer = setTimeout(
+      () => reject(new Error(`OCR timeout sau ${ms / 1000}s`)),
+      ms
+    );
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new Error('OCR_CANCELLED'));
     };
-    img.onerror = () => resolve('');
-    img.src = dataUrl;
-  });
-}
+    if (signal) signal.addEventListener('abort', onAbort, { once: true });
 
-// ==================== OTSU ====================
-function otsuThreshold(gray) {
-  const hist = new Array(256).fill(0);
-  for (let i = 0; i < gray.length; i++) hist[gray[i]]++;
-  const total = gray.length;
-  let sum = 0;
-  for (let i = 0; i < 256; i++) sum += i * hist[i];
-  let sumB = 0, wB = 0, wF = 0;
-  let maxVar = 0, threshold = 128;
-  for (let t = 0; t < 256; t++) {
-    wB += hist[t];
-    if (wB === 0) continue;
-    wF = total - wB;
-    if (wF === 0) break;
-    sumB += t * hist[t];
-    const mB = sumB / wB;
-    const mF = (sum - sumB) / wF;
-    const varBetween = wB * wF * (mB - mF) * (mB - mF);
-    if (varBetween > maxVar) { maxVar = varBetween; threshold = t; }
-  }
-  return threshold;
-}
-
-// ==================== PREPROCESSING ====================
-async function preprocessImage(rawDataUrl, options = {}) {
-  const { upscale = 2.0, useOtsu = true, threshold = 145 } = options;
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => {
-      try {
-        const scale = Math.min(4, upscale);
-        const canvas = document.createElement('canvas');
-        canvas.width  = Math.floor(img.width  * scale);
-        canvas.height = Math.floor(img.height * scale);
-        const ctx = canvas.getContext('2d', { willReadFrequently: true });
-        ctx.imageSmoothingEnabled = true;
-        ctx.imageSmoothingQuality = 'high';
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-
-        const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        const data = imgData.data;
-        const gray = new Uint8Array(data.length / 4);
-        for (let i = 0, j = 0; i < data.length; i += 4, j++) {
-          gray[j] = Math.round(data[i] * 0.299 + data[i+1] * 0.587 + data[i+2] * 0.114);
-        }
-        const th = useOtsu ? otsuThreshold(gray) : threshold;
-        for (let i = 0, j = 0; i < data.length; i += 4, j++) {
-          const val = gray[j] > th ? 255 : 0;
-          data[i] = data[i+1] = data[i+2] = val;
-          data[i+3] = 255;
-        }
-        ctx.putImageData(imgData, 0, 0);
-        resolve({ dataUrl: canvas.toDataURL('image/png'), width: canvas.width, height: canvas.height });
-      } catch (e) { reject(e); }
-    };
-    img.onerror = () => reject(new Error('Image load failed'));
-    img.src = rawDataUrl;
-  });
-}
-
-// ==================== PHÁT HIỆN TAB ====================
-function detectActiveTabByOrangeLine(imageSource) {
-  return new Promise(resolve => {
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => {
-      try {
-        const canvas = document.createElement('canvas');
-        canvas.width = img.width; canvas.height = img.height;
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(img, 0, 0);
-        const scanHeight = Math.floor(img.height * 0.20);
-        const imgData = ctx.getImageData(0, 0, img.width, scanHeight);
-        const data = imgData.data;
-        const colCount = new Array(img.width).fill(0);
-        let totalOrange = 0;
-        for (let y = 0; y < scanHeight; y++) {
-          for (let x = 0; x < img.width; x++) {
-            const idx = (y * img.width + x) * 4;
-            const r = data[idx], g = data[idx+1], b = data[idx+2];
-            if (r > 180 && g >= 40 && g <= 155 && b <= 90 && (r - g) > 45) { colCount[x]++; totalOrange++; }
-          }
-        }
-        if (totalOrange < 20) { resolve(null); return; }
-        const winSize = 40;
-        let maxSum = 0, bestCenter = 0;
-        for (let x = 0; x < img.width; x++) {
-          let sum = 0;
-          const l = Math.max(0, x - winSize);
-          const r = Math.min(img.width - 1, x + winSize);
-          for (let k = l; k <= r; k++) sum += colCount[k];
-          if (sum > maxSum) { maxSum = sum; bestCenter = x; }
-        }
-        const rel = bestCenter / img.width;
-        if (rel < 0.25) resolve('del');
-        else if (rel < 0.42) resolve('pick');
-        else resolve('ret');
-      } catch { resolve(null); }
-    };
-    img.onerror = () => resolve(null);
-    img.src = imageSource;
-  });
-}
-
-// ==================== OCR ====================
-async function ocrRecognize(preprocessedDataUrl) {
-  const worker = await getTesseractWorker();
-  const result = await worker.recognize(preprocessedDataUrl);
-  return result.data.text || '';
-}
-
-// ==================== RANGE DEFS ====================
-const RANGE_DEFS = [
-  { key: '0_2',     min: 0,  max: 2 },
-  { key: '2_4',     min: 2,  max: 4 },
-  { key: '4_6',     min: 4,  max: 6 },
-  { key: '6_8',     min: 6,  max: 8 },
-  { key: '8_10',    min: 8,  max: 10 },
-  { key: '10_12',   min: 10, max: 12 },
-  { key: '12_15',   min: 12, max: 15 },
-  { key: 'over_15', min: 15, max: 999 }
-];
-
-function identifyRangeKey(minV, maxV) {
-  for (const d of RANGE_DEFS) {
-    if (d.min === minV && d.max === maxV) return d.key;
-  }
-  if (minV === 0)  return '0_2';
-  if (minV === 2)  return '2_4';
-  if (minV === 4)  return '4_6';
-  if (minV === 6)  return '6_8';
-  if (minV === 8)  return '8_10';
-  if (minV === 10) return '10_12';
-  if (minV === 12) return '12_15';
-  if (minV === 15) return 'over_15';
-  return null;
-}
-
-// ==================== PARSE ====================
-function parseOcrText(cleanText) {
-  const weights = { '0_2':0,'2_4':0,'4_6':0,'6_8':0,'8_10':0,'10_12':0,'12_15':0,'over_15':0 };
-  const confidences = {};
-  const text = cleanText
-    .replace(/[–—]/g, '-')
-    .replace(/,/g, '.')
-    .replace(/¡/g, '1')
-    .split('\n')
-    .filter(line => !/\b\d{1,2}:\d{2}\b/.test(line))
-    .join('\n');
-
-  const totalRegex = /T[oôổ]ng\s*[:\-]?\s*(\d{1,6})/i;
-  const totalMatch = text.match(totalRegex);
-  let expectedTotal = totalMatch ? parseInt(totalMatch[1], 10) : null;
-  if (!Number.isFinite(expectedTotal)) expectedTotal = null;
-
-  const rangeRegex = /(\d{1,3})(?:[.,]\d{1,3})?\s*[-–~]\s*(\d{1,6})(?:[.,]\d{1,3})?/g;
-  const ranges = [];
-  let m;
-  while ((m = rangeRegex.exec(text)) !== null) {
-    const minV = parseInt(m[1], 10);
-    const maxV = parseInt(m[2], 10);
-    const key = identifyRangeKey(minV, maxV);
-    if (key) ranges.push({ key, pos: m.index, endPos: m.index + m[0].length });
-  }
-  ranges.sort((a, b) => a.pos - b.pos);
-
-  const totalPos = totalMatch ? totalMatch.index : -1;
-  const totalEnd = totalMatch ? totalMatch.index + totalMatch[0].length : -1;
-
-  const numRegex = /\d{1,6}/g;
-  const nums = [];
-  while ((m = numRegex.exec(text)) !== null) {
-    const val = parseInt(m[0], 10);
-    const pos = m.index;
-    const endPos = pos + m[0].length;
-    if (ranges.some(r => pos < r.endPos && endPos > r.pos)) continue;
-    if (totalPos >= 0 && pos >= totalPos && pos <= totalEnd + 3) continue;
-    if (val === 0) continue;
-    if (val > 99999) continue;
-    nums.push({ value: val, pos, endPos });
-  }
-  nums.sort((a, b) => a.pos - b.pos);
-
-  function distanceMatch(mode) {
-    const result = {};
-    const used = new Set();
-    ranges.forEach(r => {
-      let best = null, bestDist = 9999;
-      nums.forEach((n, idx) => {
-        if (used.has(idx)) return;
-        let dist;
-        if (mode === 'before') {
-          if (n.endPos > r.pos) return;
-          dist = r.pos - n.endPos;
-        } else if (mode === 'after') {
-          if (n.pos < r.endPos) return;
-          dist = n.pos - r.endPos;
-        } else {
-          dist = Math.min(
-            Math.abs(n.pos - r.pos),
-            Math.abs(n.endPos - r.endPos)
-          );
-        }
-        if (dist < bestDist && dist < 800) {
-          bestDist = dist;
-          best = { idx, value: n.value };
-        }
-      });
-      if (best) { result[r.key] = best.value; used.add(best.idx); }
+    promise.then(v => {
+      clearTimeout(timer);
+      if (signal) signal.removeEventListener('abort', onAbort);
+      resolve(v);
+    }).catch(e => {
+      clearTimeout(timer);
+      if (signal) signal.removeEventListener('abort', onAbort);
+      reject(e);
     });
-    return result;
-  }
-
-  const orderedResult = {};
-  for (let i = 0; i < ranges.length && i < nums.length; i++) {
-    orderedResult[ranges[i].key] = nums[i].value;
-  }
-
-  const sumOf = r => Object.values(r).reduce((a, b) => a + b, 0);
-  const countOf = r => Object.keys(r).length;
-
-  const mClosest = distanceMatch('closest');
-  const mBefore  = distanceMatch('before');
-  const mAfter   = distanceMatch('after');
-
-  const candidates = [
-    { name: 'ordered', res: orderedResult, cnt: countOf(orderedResult) },
-    { name: 'closest', res: mClosest,      cnt: countOf(mClosest) },
-    { name: 'before',  res: mBefore,       cnt: countOf(mBefore) },
-    { name: 'after',   res: mAfter,        cnt: countOf(mAfter) }
-  ];
-
-  candidates.forEach(c => {
-    c.diff = expectedTotal !== null ? Math.abs(sumOf(c.res) - expectedTotal) : 0;
   });
-  candidates.sort((a, b) => {
-    if (a.diff !== b.diff) return a.diff - b.diff;
-    return b.cnt - a.cnt;
-  });
-
-  const best = candidates[0];
-  let baseConf = 88;
-  if (best.diff === 0) baseConf = 95;
-  else if (best.diff <= 2) baseConf = 92;
-
-  Object.keys(best.res).forEach(k => {
-    weights[k] = best.res[k];
-    confidences[k] = baseConf;
-  });
-
-  const totalFound = Object.values(weights).reduce((a, b) => a + b, 0);
-  return { weights, confidences, expectedTotal, totalFound, mode: best.name };
 }
 
-// ==================== EXTRACT DATE ====================
-function extractDate(text) {
-  const cleanText = text.replace(/,/g, '.');
+// ==================== OCR RECOGNIZE (timeout + 1 retry) ====================
+async function ocrRecognize(preprocessedDataUrl, signal) {
+  _checkAborted(signal);
 
-  const fullMatch = cleanText.match(/(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4}|\d{2})/);
-  if (fullMatch) {
-    const day = parseInt(fullMatch[1], 10);
-    const month = parseInt(fullMatch[2], 10);
-    let year = parseInt(fullMatch[3], 10);
-    if (year < 100) year += 2000;
-    if (day >= 1 && day <= 31 && month >= 1 && month <= 12 && year >= 2020 && year <= 2099) {
-      return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  try {
+    const worker = await getTesseractWorker();
+    _checkAborted(signal);
+    const result = await withTimeout(
+      worker.recognize(preprocessedDataUrl),
+      OCR_TIMEOUT_MS,
+      signal
+    );
+    return result.data.text || '';
+  } catch (err) {
+    if (err.message === 'OCR_CANCELLED') throw err;
+
+    console.warn('[OCR] Attempt 1 fail → reset worker + retry:', err.message);
+    await resetTesseractWorker();
+    _checkAborted(signal);
+
+    try {
+      const worker = await getTesseractWorker();
+      _checkAborted(signal);
+      const result = await withTimeout(
+        worker.recognize(preprocessedDataUrl),
+        OCR_TIMEOUT_MS,
+        signal
+      );
+      return result.data.text || '';
+    } catch (err2) {
+      if (err2.message === 'OCR_CANCELLED') throw err2;
+      console.warn('[OCR] Attempt 2 fail:', err2.message);
+      throw new Error('Không đọc được ảnh — ' + err2.message);
     }
   }
-
-  const dayMatch = cleanText.match(/(?:ngày|ngay)\s*[-–:]?\s*(\d{1,2})[\/\-\.](\d{1,2})/i);
-  if (dayMatch) {
-    const day = parseInt(dayMatch[1], 10);
-    const month = parseInt(dayMatch[2], 10);
-    if (day >= 1 && day <= 31 && month >= 1 && month <= 12) {
-      return new Date().getFullYear() + '-' + String(month).padStart(2, '0') + '-' + String(day).padStart(2, '0');
-    }
-  }
-
-  const allMatches = [...cleanText.matchAll(/(\d{1,2})[\/\-\.](\d{1,2})/g)];
-  for (const m of allMatches) {
-    const day = parseInt(m[1], 10);
-    const month = parseInt(m[2], 10);
-    if (day >= 1 && day <= 31 && month >= 1 && month <= 12) {
-      return new Date().getFullYear() + '-' + String(month).padStart(2, '0') + '-' + String(day).padStart(2, '0');
-    }
-  }
-
-  return getTodayIso();
 }
 
 // ==================== HASH BLOB ====================
@@ -390,18 +205,21 @@ async function hashBlob(file) {
   try {
     const buf = await file.arrayBuffer();
     const hashBuf = await crypto.subtle.digest('SHA-1', buf);
-    return Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2, '0')).join('');
+    return Array.from(new Uint8Array(hashBuf))
+      .map(b => b.toString(16).padStart(2, '0')).join('');
   } catch {
-    return 'fb_' + Date.now().toString(16) + '_' + file.size + '_' + (file.name || '').length;
+    // Fallback: name + size + lastModified
+    return 'fb_' + Date.now().toString(16) + '_' + file.size + '_' +
+           (file.name || '').length + '_' + (file.lastModified || 0);
   }
 }
 
 // ==================== CACHE 2 TẦNG (RAM + localStorage) ====================
 const ocrCache = new Map();
-const OCR_CACHE_MAX = 200;
-const LS_CACHE_PREFIX = 'spx_ocr_cache_';
-const LS_CACHE_INDEX = 'spx_ocr_cache_index';
-const LS_CACHE_MAX_BYTES = 4 * 1024 * 1024;
+
+function _cacheKey(hash) {
+  return `${OCR_CACHE_VERSION}_${hash}`;
+}
 
 function readCacheIndex() {
   try {
@@ -431,7 +249,7 @@ function estimateLocalStorageBytes() {
       const val = localStorage.getItem(key);
       if (val) total += key.length + val.length;
     }
-    return total * 2;
+    return total * 2; // UTF-16
   } catch {
     return 0;
   }
@@ -441,9 +259,7 @@ function evictOldestCache() {
   const index = readCacheIndex();
   if (index.length === 0) return false;
   const oldest = index.shift();
-  try {
-    localStorage.removeItem(LS_CACHE_PREFIX + oldest);
-  } catch {}
+  try { localStorage.removeItem(LS_CACHE_PREFIX + oldest); } catch {}
   writeCacheIndex(index);
   ocrCache.delete(oldest);
   return true;
@@ -453,6 +269,7 @@ function pruneCacheIfNeeded() {
   const index = readCacheIndex();
   const targetCount = Math.floor(OCR_CACHE_MAX * 0.8);
   let removedCount = 0;
+
   while (index.length > targetCount) {
     const oldest = index.shift();
     try { localStorage.removeItem(LS_CACHE_PREFIX + oldest); } catch {}
@@ -471,29 +288,33 @@ function pruneCacheIfNeeded() {
 }
 
 function cacheGet(hash) {
-  if (ocrCache.has(hash)) {
-    const v = ocrCache.get(hash);
+  const key = _cacheKey(hash);
+
+  // 1) RAM
+  if (ocrCache.has(key)) {
+    const v = ocrCache.get(key);
     const index = readCacheIndex();
-    const idx = index.indexOf(hash);
+    const idx = index.indexOf(key);
     if (idx !== -1) {
       index.splice(idx, 1);
-      index.push(hash);
+      index.push(key);
       writeCacheIndex(index);
     }
     return v;
   }
 
+  // 2) localStorage
   try {
-    const raw = localStorage.getItem(LS_CACHE_PREFIX + hash);
+    const raw = localStorage.getItem(LS_CACHE_PREFIX + key);
     if (raw) {
       const value = JSON.parse(raw);
-      ocrCache.set(hash, value);
+      ocrCache.set(key, value);
 
       const index = readCacheIndex();
-      const idx = index.indexOf(hash);
+      const idx = index.indexOf(key);
       if (idx !== -1) {
         index.splice(idx, 1);
-        index.push(hash);
+        index.push(key);
         writeCacheIndex(index);
       }
       return value;
@@ -506,23 +327,22 @@ function cacheGet(hash) {
 }
 
 function cacheSet(hash, value) {
-  ocrCache.set(hash, value);
+  const key = _cacheKey(hash);
+  ocrCache.set(key, value);
 
   try {
-    localStorage.setItem(LS_CACHE_PREFIX + hash, JSON.stringify(value));
-
+    localStorage.setItem(LS_CACHE_PREFIX + key, JSON.stringify(value));
     const index = readCacheIndex();
-    if (!index.includes(hash)) {
-      index.push(hash);
+    if (!index.includes(key)) {
+      index.push(key);
       writeCacheIndex(index);
     }
-
     pruneCacheIfNeeded();
   } catch (e) {
     console.warn('[OCR Cache] Ghi localStorage lỗi:', e.message);
     try {
       pruneCacheIfNeeded();
-      localStorage.setItem(LS_CACHE_PREFIX + hash, JSON.stringify(value));
+      localStorage.setItem(LS_CACHE_PREFIX + key, JSON.stringify(value));
     } catch (e2) {
       console.warn('[OCR Cache] Vẫn không ghi được:', e2.message);
     }
@@ -550,14 +370,15 @@ export async function clearOcrCache() {
   try {
     const index = readCacheIndex();
     count = index.length;
-    index.forEach(hash => {
-      try { localStorage.removeItem(LS_CACHE_PREFIX + hash); } catch {}
+    index.forEach(key => {
+      try { localStorage.removeItem(LS_CACHE_PREFIX + key); } catch {}
     });
     localStorage.removeItem(LS_CACHE_INDEX);
   } catch (e) {
     console.warn('[OCR Cache] Xóa lỗi:', e.message);
   }
 
+  // Dọn sạch hết các key còn sót
   try {
     let actualCount = 0;
     const toRemove = [];
@@ -580,26 +401,718 @@ export async function clearOcrCache() {
 export function getOcrCacheStats() {
   const index = readCacheIndex();
   const ramCount = ocrCache.size;
-  const lsCount = index.length;
-  const bytes = estimateLocalStorageBytes();
+  const lsCount  = index.length;
+  const bytes    = estimateLocalStorageBytes();
   return {
     ramEntries: ramCount,
-    lsEntries: lsCount,
-    sizeKB: Math.round(bytes / 1024),
+    lsEntries:  lsCount,
+    sizeKB:     Math.round(bytes / 1024),
     maxEntries: OCR_CACHE_MAX,
-    maxSizeKB: Math.round(LS_CACHE_MAX_BYTES / 1024)
+    maxSizeKB:  Math.round(LS_CACHE_MAX_BYTES / 1024)
+  };
+}
+// =============================================================
+// OCR ENGINE v2 — PART 2/3
+// Image · Preprocess · Parser · Validation · Scoring
+// =============================================================
+
+// ==================== IMAGE HELPERS ====================
+
+/**
+ * Load ảnh → trả về { img, width, height }
+ */
+function loadImage(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('Không load được ảnh'));
+    img.src = src;
+  });
+}
+
+/**
+ * Đọc File → DataURL (chỉ dùng khi cần lưu preview)
+ */
+function readFileAsDataURL(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = e => resolve(e.target.result);
+    r.onerror = () => reject(new Error('Không đọc được file'));
+    r.readAsDataURL(file);
+  });
+}
+
+/**
+ * Tạo thumbnail nhỏ từ DataURL
+ */
+function makeThumbnail(dataUrl, maxW = 96) {
+  return new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const scale = Math.min(1, maxW / img.width);
+        const canvas = document.createElement('canvas');
+        canvas.width  = Math.floor(img.width * scale);
+        canvas.height = Math.floor(img.height * scale);
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL('image/jpeg', 0.65));
+      } catch { resolve(''); }
+    };
+    img.onerror = () => resolve('');
+    img.src = dataUrl;
+  });
+}
+
+// ==================== DETECT ACTIVE TAB ====================
+// Gạch cam dưới tab active:
+//   Đã giao hàng  [trái]   0-33%
+//   Đã lấy        [giữa]  33-66%
+//   Đã trả hàng   [phải]  66-100%
+
+const TAB_ZONES = [
+  { type: 'del',  min: 0.00, max: 0.33 },
+  { type: 'pick', min: 0.33, max: 0.66 },
+  { type: 'ret',  min: 0.66, max: 1.00 }
+];
+
+const TAB_MIN_CONFIDENCE = 60; // nếu < 60 → trả null, user chọn
+
+/**
+ * Detect tab active qua gạch cam dưới tab
+ * @returns {Promise<{type: string, confidence: number} | null>}
+ */
+function detectActiveTab(imageSource) {
+  return new Promise(resolve => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width  = img.width;
+        canvas.height = img.height;
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        ctx.drawImage(img, 0, 0);
+
+        // Quét dải 10-20% chiều cao (khu vực tab bar + gạch cam dưới)
+        const scanY1 = Math.floor(img.height * 0.10);
+        const scanY2 = Math.floor(img.height * 0.20);
+        const scanH  = scanY2 - scanY1;
+
+        const imgData = ctx.getImageData(0, scanY1, img.width, scanH);
+        const data = imgData.data;
+
+        // Đếm pixel cam theo từng cột
+        const colCount = new Array(img.width).fill(0);
+        let totalOrange = 0;
+
+        for (let y = 0; y < scanH; y++) {
+          for (let x = 0; x < img.width; x++) {
+            const idx = (y * img.width + x) * 4;
+            const r = data[idx], g = data[idx+1], b = data[idx+2];
+            // Cam: r cao, g vừa, b thấp, r-g đủ lớn
+            if (r > 180 && g >= 40 && g <= 155 && b <= 90 && (r - g) > 45) {
+              colCount[x]++;
+              totalOrange++;
+            }
+          }
+        }
+
+        // Không đủ pixel cam → không detect được
+        if (totalOrange < 30) {
+          resolve(null);
+          return;
+        }
+
+        // Tìm cột có mật độ cam cao nhất (sliding window)
+        const winSize = 40;
+        let maxSum = 0, bestCenter = 0;
+        for (let x = 0; x < img.width; x++) {
+          let sum = 0;
+          const l = Math.max(0, x - winSize);
+          const r = Math.min(img.width - 1, x + winSize);
+          for (let k = l; k <= r; k++) sum += colCount[k];
+          if (sum > maxSum) { maxSum = sum; bestCenter = x; }
+        }
+
+        const rel = bestCenter / img.width;
+
+        // Xác định zone chứa rel
+        let matched = null;
+        for (const z of TAB_ZONES) {
+          if (rel >= z.min && rel < z.max) { matched = z; break; }
+        }
+        if (!matched) matched = TAB_ZONES[0]; // fallback về trái
+
+        // Confidence: khoảng cách giữa tâm gạch cam và tâm zone
+        const zoneCenter = (matched.min + matched.max) / 2;
+        const distance   = Math.abs(rel - zoneCenter);
+        const zoneHalfWidth = (matched.max - matched.min) / 2;
+        // distance = 0 → 100%, distance >= zoneHalfWidth → 60%
+        const distanceRatio = Math.min(1, distance / zoneHalfWidth);
+        const confidence = Math.round(100 - distanceRatio * 40);
+
+        if (confidence < TAB_MIN_CONFIDENCE) {
+          resolve(null);
+          return;
+        }
+
+        resolve({ type: matched.type, confidence });
+      } catch (err) {
+        console.warn('[OCR] detectActiveTab error:', err);
+        resolve(null);
+      }
+    };
+    img.onerror = () => resolve(null);
+    img.src = imageSource;
+  });
+}
+
+// ==================== PREPROCESS ====================
+
+/**
+ * Vẽ ảnh lên canvas ở scale mới
+ */
+function _drawToCanvas(img, scale) {
+  const s = Math.min(4, Math.max(1, scale));
+  const canvas = document.createElement('canvas');
+  canvas.width  = Math.floor(img.width  * s);
+  canvas.height = Math.floor(img.height * s);
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  return { canvas, ctx, width: canvas.width, height: canvas.height };
+}
+
+/**
+ * Grayscale toàn bộ canvas
+ * @returns {Uint8Array} gray array
+ */
+function _toGrayscale(data) {
+  const gray = new Uint8Array(data.length / 4);
+  for (let i = 0, j = 0; i < data.length; i += 4, j++) {
+    gray[j] = Math.round(
+      data[i] * 0.299 + data[i+1] * 0.587 + data[i+2] * 0.114
+    );
+  }
+  return gray;
+}
+
+/**
+ * Áp dụng contrast stretch: kéo dải sáng tối về 0-255
+ * @param {Uint8Array} gray
+ * @param {number} lowPct  — percentile thấp (0.02 = 2%)
+ * @param {number} highPct — percentile cao (0.98)
+ */
+function _applyContrast(gray, lowPct = 0.02, highPct = 0.98) {
+  // Histogram
+  const hist = new Array(256).fill(0);
+  for (let i = 0; i < gray.length; i++) hist[gray[i]]++;
+
+  const total = gray.length;
+  const lowTarget  = total * lowPct;
+  const highTarget = total * highPct;
+
+  let acc = 0, lowVal = 0, highVal = 255;
+  for (let v = 0; v < 256; v++) {
+    acc += hist[v];
+    if (acc >= lowTarget)  { lowVal = v; break; }
+  }
+  acc = 0;
+  for (let v = 255; v >= 0; v--) {
+    acc += hist[v];
+    if (acc >= (total - highTarget)) { highVal = v; break; }
+  }
+
+  if (highVal <= lowVal) return gray; // bất thường → giữ nguyên
+
+  const range = highVal - lowVal;
+  const out = new Uint8Array(gray.length);
+  for (let i = 0; i < gray.length; i++) {
+    let v = ((gray[i] - lowVal) / range) * 255;
+    if (v < 0) v = 0;
+    else if (v > 255) v = 255;
+    out[i] = v;
+  }
+  return out;
+}
+
+/**
+ * Otsu threshold (tự tính ngưỡng tối ưu)
+ */
+function _otsuThreshold(gray) {
+  const hist = new Array(256).fill(0);
+  for (let i = 0; i < gray.length; i++) hist[gray[i]]++;
+
+  const total = gray.length;
+  let sum = 0;
+  for (let i = 0; i < 256; i++) sum += i * hist[i];
+
+  let sumB = 0, wB = 0, wF = 0;
+  let maxVar = 0, threshold = 128;
+
+  for (let t = 0; t < 256; t++) {
+    wB += hist[t];
+    if (wB === 0) continue;
+    wF = total - wB;
+    if (wF === 0) break;
+
+    sumB += t * hist[t];
+    const mB = sumB / wB;
+    const mF = (sum - sumB) / wF;
+    const varBetween = wB * wF * (mB - mF) * (mB - mF);
+    if (varBetween > maxVar) { maxVar = varBetween; threshold = t; }
+  }
+  return threshold;
+}
+
+/**
+ * Binarize gray → đen/trắng với ngưỡng cho trước
+ * @returns {Uint8ClampedArray} RGBA array (ready to putImageData)
+ */
+function _binarize(gray, threshold) {
+  const out = new Uint8ClampedArray(gray.length * 4);
+  for (let i = 0, j = 0; i < gray.length; i++, j += 4) {
+    const val = gray[i] > threshold ? 255 : 0;
+    out[j]   = val;
+    out[j+1] = val;
+    out[j+2] = val;
+    out[j+3] = 255;
+  }
+  return out;
+}
+
+/**
+ * PASS 1 — Grayscale + Contrast, KHÔNG binarize
+ * → Giữ được chữ mảnh, dấu tiếng Việt, số nhỏ
+ */
+async function preprocessPass1(rawDataUrl, signal) {
+  _checkAborted(signal);
+  const img = await loadImage(rawDataUrl);
+  const { ctx, canvas } = _drawToCanvas(img, 2.0);
+
+  const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const gray    = _toGrayscale(imgData.data);
+  const contrast = _applyContrast(gray, 0.02, 0.98);
+
+  // Ghi ngược lại vào canvas (grayscale + contrast)
+  const out = new Uint8ClampedArray(contrast.length * 4);
+  for (let i = 0, j = 0; i < contrast.length; i++, j += 4) {
+    out[j]   = contrast[i];
+    out[j+1] = contrast[i];
+    out[j+2] = contrast[i];
+    out[j+3] = 255;
+  }
+  ctx.putImageData(new ImageData(out, canvas.width, canvas.height), 0, 0);
+
+  return canvas.toDataURL('image/png');
+}
+
+/**
+ * PASS 2 — Grayscale + Contrast + Otsu
+ */
+async function preprocessPass2(rawDataUrl, signal) {
+  _checkAborted(signal);
+  const img = await loadImage(rawDataUrl);
+  const { ctx, canvas } = _drawToCanvas(img, 2.0);
+
+  const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const gray    = _toGrayscale(imgData.data);
+  const contrast = _applyContrast(gray, 0.02, 0.98);
+  const threshold = _otsuThreshold(contrast);
+  const bin     = _binarize(contrast, threshold);
+
+  ctx.putImageData(new ImageData(bin, canvas.width, canvas.height), 0, 0);
+  return canvas.toDataURL('image/png');
+}
+
+/**
+ * PASS 3 — Grayscale + Contrast + Threshold cố định
+ */
+async function preprocessPass3(rawDataUrl, fixedThreshold, signal) {
+  _checkAborted(signal);
+  const img = await loadImage(rawDataUrl);
+  const { ctx, canvas } = _drawToCanvas(img, 2.5);
+
+  const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const gray    = _toGrayscale(imgData.data);
+  const contrast = _applyContrast(gray, 0.02, 0.98);
+  const bin     = _binarize(contrast, fixedThreshold);
+
+  ctx.putImageData(new ImageData(bin, canvas.width, canvas.height), 0, 0);
+  return canvas.toDataURL('image/png');
+}
+
+// ==================== PARSE ====================
+
+/**
+ * Chuẩn hóa text OCR — fix các lỗi phổ biến
+ */
+function normalizeOcrText(text) {
+  return text
+    // Dash variants → dấu gạch ngang
+    .replace(/[–—−]/g, '-')
+    // Comma thập phân → dấu chấm (OCR thường đọc lộn)
+    .replace(/(\d),(\d)/g, '$1.$2')
+    // | → 1 (chữ I hoa, pipe)
+    .replace(/[|¡]/g, '1')
+    // O hoa trong số → 0
+    .replace(/\bO(\d)/g, '0$1')
+    // Số + O ở giữa → số + 0
+    .replace(/(\d)O\b/g, '$10')
+    // Nhiều khoảng trắng → 1
+    .replace(/[ \t]+/g, ' ')
+    // Xóa dòng chứa giờ (VD: "22:15")
+    .split('\n')
+    .filter(line => !/\b\d{1,2}:\d{2}\b/.test(line))
+    .join('\n');
+}
+
+/**
+ * Trích xuất "Tổng N đơn hàng"
+ * @returns {number|null}
+ */
+function extractTotal(text) {
+  // Pattern linh hoạt: "Tổng 53 đơn hàng" / "Tổng: 53 đơn hàng" / "Tong 53 don hang"
+  const patterns = [
+    /Tổng\s*[:\-]?\s*(\d{1,6})\s*đơn\s*hàng/i,
+    /Tong\s*[:\-]?\s*(\d{1,6})\s*don\s*hang/i,
+    /Tổng\s*[:\-]?\s*(\d{1,6})/i
+  ];
+  for (const p of patterns) {
+    const m = text.match(p);
+    if (m) {
+      const n = parseInt(m[1], 10);
+      if (Number.isFinite(n) && n > 0 && n < 100000) return n;
+    }
+  }
+  return null;
+}
+
+/**
+ * Trích xuất ngày từ tiêu đề "Chi tiết đơn theo ngày - 04/10"
+ * @returns {string} ISO date "2026-10-04"
+ */
+function extractDate(text) {
+  const clean = text.replace(/,/g, '.');
+
+  // Ưu tiên 1: Full date với 4 chữ số năm
+  const fullMatch = clean.match(/(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4}|\d{2})/);
+  if (fullMatch) {
+    const day = parseInt(fullMatch[1], 10);
+    const month = parseInt(fullMatch[2], 10);
+    let year = parseInt(fullMatch[3], 10);
+    if (year < 100) year += 2000;
+    if (day >= 1 && day <= 31 && month >= 1 && month <= 12 &&
+        year >= 2020 && year <= 2099) {
+      return `${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+    }
+  }
+
+  // Ưu tiên 2: "ngày 04/10"
+  const dayMatch = clean.match(/(?:ngày|ngay)\s*[-–:]?\s*(\d{1,2})[\/\-\.](\d{1,2})/i);
+  if (dayMatch) {
+    const day = parseInt(dayMatch[1], 10);
+    const month = parseInt(dayMatch[2], 10);
+    if (day >= 1 && day <= 31 && month >= 1 && month <= 12) {
+      const y = new Date().getFullYear();
+      return `${y}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+    }
+  }
+
+  // Ưu tiên 3: Bất kỳ cặp dd/mm nào
+  const allMatches = [...clean.matchAll(/(\d{1,2})[\/\-\.](\d{1,2})/g)];
+  for (const m of allMatches) {
+    const day = parseInt(m[1], 10);
+    const month = parseInt(m[2], 10);
+    if (day >= 1 && day <= 31 && month >= 1 && month <= 12) {
+      const y = new Date().getFullYear();
+      return `${y}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+    }
+  }
+
+  return getTodayIso();
+}
+
+/**
+ * Map (min, max) → key dải
+ * Chấp nhận format: 0.000 - 2.001, 15.001 - 999999.000
+ * @returns {string|null}
+ */
+function mapRangeToKey(minStr, maxStr) {
+  const min = parseFloat(minStr);
+  const max = parseFloat(maxStr);
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
+
+  const minInt = Math.floor(min);
+
+  // Match chính xác theo min int
+  if (RANGE_KEY_BY_MIN[minInt] !== undefined) {
+    return RANGE_KEY_BY_MIN[minInt];
+  }
+
+  // Fallback: min ≥ 15 → over_15
+  if (min >= 15) return 'over_15';
+
+  return null;
+}
+
+/**
+ * PARSE BLOCK-BASED
+ * 
+ * Cách hoạt động:
+ *   1. Tìm tất cả range pattern "X.XXX - Y.YYY" theo thứ tự xuất hiện
+ *   2. Với mỗi range, tìm "N Đơn hàng" trong ~150 ký tự ngay sau
+ *   3. Fill 0 cho dải không xuất hiện
+ * 
+ * @returns {{
+ *   weights: object,
+ *   detectedRanges: number,
+ *   parseMode: string
+ * }}
+ */
+function parseBlockBased(text) {
+  const weights = {
+    '0_2': 0, '2_4': 0, '4_6': 0, '6_8': 0,
+    '8_10': 0, '10_12': 0, '12_15': 0, 'over_15': 0
+  };
+
+  // Bước 1: Tìm tất cả range "0.000 - 2.001" v.v.
+  // Regex: số thập phân 1-6 chữ số + dấu chấm + 3 chữ số | dash | số tương tự
+  const rangeRegex = /(\d{1,6}\.\d{3})\s*-\s*(\d{1,6}\.\d{3})/g;
+  const ranges = [];
+  let m;
+  while ((m = rangeRegex.exec(text)) !== null) {
+    ranges.push({
+      minStr: m[1],
+      maxStr: m[2],
+      pos:    m.index,
+      endPos: m.index + m[0].length
+    });
+  }
+
+  if (ranges.length === 0) {
+    return { weights, detectedRanges: 0, parseMode: 'block-empty' };
+  }
+
+  // Bước 2: Với mỗi range → tìm "N Đơn hàng" trong 200 ký tự ngay sau
+  const orderRegex = /(\d{1,6})\s*Đơn\s*hàng/i;
+  const fallbackOrderRegex = /(\d{1,6})\s*Don\s*hang/i;
+
+  ranges.forEach(r => {
+    const key = mapRangeToKey(r.minStr, r.maxStr);
+    if (!key) return;
+
+    // Cửa sổ tìm: từ sau range đến 250 ký tự
+    const searchStart = r.endPos;
+    const searchEnd   = Math.min(text.length, r.endPos + 250);
+    const window      = text.slice(searchStart, searchEnd);
+
+    // Tìm "N Đơn hàng" đầu tiên trong cửa sổ
+    let orderMatch = window.match(orderRegex);
+    if (!orderMatch) orderMatch = window.match(fallbackOrderRegex);
+
+    // Fallback: số đầu tiên trong cửa sổ (chỉ khi không match pattern)
+    let orders = 0;
+    if (orderMatch) {
+      orders = parseInt(orderMatch[1], 10) || 0;
+    } else {
+      // Tìm số đầu tiên 1-4 chữ số (tránh số quá lớn)
+      const numMatch = window.match(/\b(\d{1,4})\b/);
+      if (numMatch) orders = parseInt(numMatch[1], 10) || 0;
+    }
+
+    // Chỉ ghi nếu chưa có (tránh ghi đè nếu 2 range cùng key — bất thường)
+    if (weights[key] === 0) {
+      weights[key] = orders;
+    }
+  });
+
+  return {
+    weights,
+    detectedRanges: ranges.length,
+    parseMode: 'block'
   };
 }
 
-// ==================== BATCH STATE ====================
-let batchResults = [];
-let pendingAppend = false;
+// ==================== VALIDATION ====================
 
-// ==================== HELPERS ====================
+/**
+ * Validate structure: số dải có data, tổng không âm
+ */
+function validateStructure(weights) {
+  const values = Object.values(weights);
+  const nonZero = values.filter(v => Number(v) > 0).length;
+  const total   = values.reduce((a, b) => a + Number(b), 0);
+
+  const errors = [];
+  const warnings = [];
+
+  if (total === 0) errors.push('Không đọc được đơn nào');
+  if (nonZero > 8) errors.push('Quá nhiều dải có dữ liệu (>8)');
+
+  return { ok: errors.length === 0, errors, warnings, nonZero, total };
+}
+
+/**
+ * Soft distribution warning — không loại, chỉ cảnh báo
+ * (Vì có ngày 100% đơn ở dải 0-2 là bình thường)
+ */
+function validateDistribution(weights) {
+  const w = {
+    '0_2':    Number(weights['0_2'])    || 0,
+    '2_4':    Number(weights['2_4'])    || 0,
+    '4_6':    Number(weights['4_6'])    || 0,
+    '6_8':    Number(weights['6_8'])    || 0,
+    '8_10':   Number(weights['8_10'])   || 0,
+    '10_12':  Number(weights['10_12'])  || 0,
+    '12_15':  Number(weights['12_15'])  || 0,
+    'over_15':Number(weights['over_15'])|| 0
+  };
+  const total = Object.values(w).reduce((s, v) => s + v, 0);
+  if (total < 5) return { ok: true, warnings: [], suspectKeys: [] };
+
+  const warnings = [];
+  const suspects = new Set();
+
+  // Soft checks — chỉ cảnh báo nếu CỰC ĐOAN
+  const maxVal = Math.max(...Object.values(w));
+  const maxKey = Object.keys(w).find(k => w[k] === maxVal);
+  if (maxKey && maxKey !== '0_2' && w['0_2'] > 0 && maxVal > w['0_2'] * 10) {
+    warnings.push(`Dải ${maxKey} cao gấp >10× dải 0-2`);
+    suspects.add(maxKey);
+  }
+
+  // Dải 2-4 cao hơn 0-2 (rất bất thường)
+  if (w['2_4'] > w['0_2'] * 2 && w['0_2'] < 5) {
+    warnings.push('Dải 2-4 cao hơn 0-2 gấp 2 lần — có thể lỗi');
+    suspects.add('2_4');
+  }
+
+  return { ok: warnings.length === 0, warnings, suspectKeys: [...suspectedKeysFix(suspects)] };
+}
+
+function suspectedKeysFix(set) {
+  return Array.from(set);
+}
+
+/**
+ * Tìm exact duplicate (cùng ngày + cùng type + cùng weights)
+ */
+function findExactDuplicate(r) {
+  const type = getTypeFromResult(r);
+  const weights = buildWeights(r);
+  return state.appData[type].find(rec =>
+    rec.date === r.parsedDate &&
+    WEIGHT_KEYS.every(k =>
+      (parseInt(rec.weights[k], 10) || 0) === (parseInt(weights[k], 10) || 0)
+    )
+  ) || null;
+}
+
+/**
+ * Tìm record CÙNG NGÀY + CÙNG TYPE (khác weights)
+ */
+function findSameDaySameType(r) {
+  const type = getTypeFromResult(r);
+  return state.appData[type].find(rec => rec.date === r.parsedDate) || null;
+}
+
+// ==================== SCORING ====================
+
+/**
+ * Tính confidence score 0-100
+ * 
+ * Công thức:
+ *   total        x 0.50  — checksum khớp bao nhiêu
+ *   structure    x 0.25  — số dải hợp lệ, số dải có data
+ *   ocr          x 0.15  — Tesseract tự đánh giá
+ *   distribution x 0.10  — phân bố có hợp lý không (soft)
+ * 
+ * Nếu checksum fail → cap max = SCORE_MAX_CHECKSUM_FAIL (84)
+ * → tự động rớt xuống Manual modal
+ */
+function computeScore({
+  expectedTotal,
+  actualTotal,
+  detectedRanges,
+  nonZeroRanges,
+  ocrConfidence,
+  distributionWarnings
+}) {
+  // ---- 1. Total score ----
+  let totalScore;
+  if (expectedTotal === null) {
+    totalScore = 70; // không có checksum → trung bình
+  } else if (expectedTotal === actualTotal) {
+    totalScore = 100;
+  } else {
+    const diff = Math.abs(expectedTotal - actualTotal);
+    const diffPct = diff / Math.max(expectedTotal, 1);
+    if (diffPct <= 0.02)      totalScore = 90;
+    else if (diffPct <= 0.05) totalScore = 75;
+    else if (diffPct <= 0.10) totalScore = 55;
+    else                      totalScore = 30;
+  }
+
+  // ---- 2. Structure score ----
+  let structureScore = 100;
+  if (detectedRanges === 0)        structureScore = 30;
+  else if (detectedRanges > 8)     structureScore = 60;
+  else if (nonZeroRanges === 0)    structureScore = 30;
+  else                             structureScore = 100;
+
+  // ---- 3. OCR score ----
+  const ocrScore = Number.isFinite(ocrConfidence)
+    ? Math.max(0, Math.min(100, ocrConfidence))
+    : 85;
+
+  // ---- 4. Distribution score ----
+  const distributionScore = distributionWarnings.length === 0
+    ? 100
+    : Math.max(50, 100 - distributionWarnings.length * 15);
+
+  // ---- Weighted final ----
+  let finalScore =
+    totalScore        * 0.50 +
+    structureScore    * 0.25 +
+    ocrScore          * 0.15 +
+    distributionScore * 0.10;
+
+  // ---- Cap if checksum fail ----
+  const checksumOk = expectedTotal !== null && expectedTotal === actualTotal;
+  if (!checksumOk) {
+    finalScore = Math.min(finalScore, SCORE_MAX_CHECKSUM_FAIL);
+  }
+
+  return {
+    final:        Math.round(finalScore),
+    total:        Math.round(totalScore),
+    structure:    Math.round(structureScore),
+    ocr:          Math.round(ocrScore),
+    distribution: Math.round(distributionScore),
+    checksumOk
+  };
+}
+
+// ==================== HELPERS (dùng chung part 3) ====================
+
+/**
+ * Build weights object từ OCR result
+ * (dùng format WEIGHT_KEYS của config.js)
+ */
 function buildWeights(r) {
   const suffixMap = {
-    '0_2':'w0_2','2_4':'w2_4','4_6':'w4_6','6_8':'w6_8',
-    '8_10':'w8_10','10_12':'w10_12','12_15':'w12_15','over_15':'wover_15'
+    '0_2':    'w0_2',
+    '2_4':    'w2_4',
+    '4_6':    'w4_6',
+    '6_8':    'w6_8',
+    '8_10':   'w8_10',
+    '10_12':  'w10_12',
+    '12_15':  'w12_15',
+    'over_15':'wover_15'
   };
   const w = {};
   WEIGHT_KEYS.forEach(wk => {
@@ -609,83 +1122,275 @@ function buildWeights(r) {
   return w;
 }
 
+/**
+ * Xác định type từ OCR result
+ * @returns {'delivery'|'pickup'|'return'|null}
+ */
 function getTypeFromResult(r) {
-  return r.detectedColorType === 'del' ? 'delivery'
-       : r.detectedColorType === 'pick' ? 'pickup' : 'return';
+  if (!r.detectedColorType) return null;
+  return r.detectedColorType === 'del'  ? 'delivery'
+       : r.detectedColorType === 'pick' ? 'pickup'
+       : 'return';
 }
 
+/**
+ * Label hiển thị
+ */
 function getTypeLabel(r) {
-  return r.detectedColorType === 'del' ? 'Giao'
-       : r.detectedColorType === 'pick' ? 'Lấy' : 'Hoàn';
+  if (!r.detectedColorType) return 'Không rõ';
+  return r.detectedColorType === 'del'  ? 'Giao'
+       : r.detectedColorType === 'pick' ? 'Lấy'
+       : 'Hoàn';
+}
+// =============================================================
+// OCR ENGINE v2 — PART 3/3
+// Pipeline · Routing · Modals · Batch · Exports
+// =============================================================
+
+// ==================== UNDO LOADER ====================
+let _pushUndoFn = null;
+let _pushUndoLoading = null;
+
+async function ensurePushUndo() {
+  if (_pushUndoFn) return _pushUndoFn;
+  if (_pushUndoLoading) return _pushUndoLoading;
+  _pushUndoLoading = (async () => {
+    try {
+      const mod = await import('./undo.js');
+      _pushUndoFn = mod.pushUndo || null;
+      return _pushUndoFn;
+    } catch (e) {
+      console.warn('[OCR] Không load được undo.js:', e);
+      return null;
+    }
+  })();
+  return _pushUndoLoading;
 }
 
-function findExactDuplicate(r) {
-  const type = getTypeFromResult(r);
-  const weights = buildWeights(r);
-  return state.appData[type].find(rec =>
-    rec.date === r.parsedDate &&
-    WEIGHT_KEYS.every(k => (parseInt(rec.weights[k], 10) || 0) === (parseInt(weights[k], 10) || 0))
-  ) || null;
-}
+// ==================== PARSE FROM TEXT ====================
+/**
+ * Nhận text OCR thô → trả về object đã parse đầy đủ
+ */
+function parseFromText(rawText) {
+  const normalized = normalizeOcrText(rawText);
+  const expectedTotal = extractTotal(normalized);
+  const parsedDate    = extractDate(normalized);
+  const blockResult   = parseBlockBased(normalized);
+  const weights       = blockResult.weights;
+  const actualTotal   = Object.values(weights).reduce((a, b) => a + b, 0);
 
-// ==================== VALIDATE PHÂN BỐ ====================
-function validateDistribution(weights) {
-  const w = {
-    '0_2':    parseInt(weights['0_2'], 10)   || 0,
-    '2_4':    parseInt(weights['2_4'], 10)   || 0,
-    '4_6':    parseInt(weights['4_6'], 10)   || 0,
-    '6_8':    parseInt(weights['6_8'], 10)   || 0,
-    '8_10':   parseInt(weights['8_10'], 10)  || 0,
-    '10_12':  parseInt(weights['10_12'], 10) || 0,
-    '12_15':  parseInt(weights['12_15'], 10) || 0,
-    'over_15':parseInt(weights['over_15'], 10)|| 0
+  return {
+    normalized,
+    expectedTotal,
+    parsedDate,
+    weights,
+    actualTotal,
+    detectedRanges: blockResult.detectedRanges,
+    parseMode:      blockResult.parseMode
   };
-  const total = Object.values(w).reduce((s, v) => s + v, 0);
-  if (total < 5) return { ok: true, warnings: [], suspectKeys: [] };
-
-  const warnings = [];
-  const suspects = new Set();
-
-  if (w['0_2'] / total < 0.5) {
-    warnings.push(`Dải 0-2 chỉ ${Math.round(w['0_2']/total*100)}% (thường ≥50%)`);
-    suspects.add('0_2');
-  }
-  if (w['2_4'] >= 10 && w['0_2'] < w['2_4'] * 0.33) {
-    warnings.push('Dải 2-4 nhiều bất thường so với dải 0-2');
-    suspects.add('0_2'); suspects.add('2_4');
-  }
-  if (w['4_6'] >= 5 && w['2_4'] < w['4_6'] * 0.33) {
-    warnings.push('Dải 4-6 nhiều bất thường so với dải 2-4');
-    suspects.add('2_4'); suspects.add('4_6');
-  }
-  const maxKey = Object.keys(w).reduce((a, b) => w[a] > w[b] ? a : b);
-  if (w['0_2'] > 0 && w[maxKey] > w['0_2'] * 5) {
-    warnings.push('Có dải cao bất thường');
-    suspects.add(maxKey);
-  }
-  const small = w['0_2'] + w['2_4'] + w['4_6'];
-  if (small / total < 0.7) {
-    warnings.push(`Dải nhỏ chỉ ${Math.round(small/total*100)}% (thường ≥70%)`);
-    suspects.add('0_2'); suspects.add('2_4'); suspects.add('4_6');
-  }
-
-  return { ok: warnings.length === 0, warnings, suspectKeys: [...suspects] };
 }
 
-// ==================== AUTO-SAVE + UNDO ====================
+// ==================== SCORE RESULT ====================
+/**
+ * Tính điểm confidence cho 1 kết quả parse
+ */
+function scoreResult(parsed) {
+  const structure = validateStructure(parsed.weights);
+  const dist      = validateDistribution(parsed.weights);
+  const nonZero   = Object.values(parsed.weights).filter(v => v > 0).length;
+
+  const score = computeScore({
+    expectedTotal: parsed.expectedTotal,
+    actualTotal:   parsed.actualTotal,
+    detectedRanges: parsed.detectedRanges,
+    nonZeroRanges:  nonZero,
+    ocrConfidence: 85, // Tesseract v5 không trả confidence per-cell → dùng baseline
+    distributionWarnings: dist.warnings
+  });
+
+  return {
+    score,
+    structure,
+    dist,
+    nonZero,
+    suspectKeys: dist.suspectKeys || []
+  };
+}
+
+// ==================== BUILD FINAL RESULT ====================
+function buildFinalResult({
+  parsed, rawText, detectedColorType, tabConfidence,
+  scoreBundle, attempts, blobUrl
+}) {
+  // Confidences cho từng dải = score.final (đơn giản hóa)
+  const confidences = {};
+  Object.keys(parsed.weights).forEach(k => {
+    confidences[k] = scoreBundle.score.final;
+  });
+
+  return {
+    // Kết quả chính
+    detectedColorType,        // 'del' | 'pick' | 'ret' | null
+    tabConfidence: tabConfidence || 0,
+    parsedDate:    parsed.parsedDate,
+    weights:       parsed.weights,
+    confidences,
+
+    // Checksum
+    expectedTotal: parsed.expectedTotal,
+    actualTotal:   parsed.actualTotal,
+    totalFound:    parsed.actualTotal, // backward compat
+
+    // Score breakdown
+    score: scoreBundle.score,
+
+    // Cảnh báo mềm
+    distWarnings: scoreBundle.dist.warnings,
+    suspectKeys:  scoreBundle.suspectKeys,
+
+    // Metadata
+    attempts,
+    parseMode: parsed.parseMode,
+    detectedRanges: parsed.detectedRanges,
+
+    // Raw + preview
+    rawText,
+    imageBlobUrl: blobUrl || '',
+    fullDataUrl:  blobUrl || '' // backward compat cho modal cũ
+  };
+}
+
+// ==================== PROCESS ONE FILE ====================
+/**
+ * Xử lý 1 file ảnh qua pipeline 3 pass
+ * @returns {Promise<{
+ *   file: string,
+ *   thumbnail: string,
+ *   result: object | null,
+ *   error: string | null,
+ *   fromCache?: boolean
+ * }>}
+ */
+async function processOneFile(file, signal) {
+  _checkAborted(signal);
+
+  // ---- 1. Cache check ----
+  const hash = await hashBlob(file);
+  const cached = cacheGet(hash);
+
+  // Load ảnh gốc → blobURL (RAM-friendly)
+  const blobUrl = URL.createObjectURL(file);
+
+  if (cached) {
+    return {
+      file: file.name,
+      thumbnail: cached.thumbnail,
+      result: { ...cached.result, imageBlobUrl: blobUrl, fullDataUrl: blobUrl },
+      error: null,
+      fromCache: true
+    };
+  }
+
+  // ---- 2. Đọc ảnh gốc ----
+  _checkAborted(signal);
+  const dataUrl = await readFileAsDataURL(file);
+  const thumbnail = await makeThumbnail(dataUrl, 96);
+
+  // ---- 3. Detect tab ----
+  _checkAborted(signal);
+  const tabInfo = await detectActiveTab(dataUrl);
+  const detectedColorType = tabInfo ? tabInfo.type : null;
+  const tabConfidence = tabInfo ? tabInfo.confidence : 0;
+
+  // ---- 4. 3 Pass OCR ----
+  let bestBundle = null;
+  let bestScore  = -1;
+  let attempts   = 0;
+
+  // Các pass: [hàm preprocess, tham số]
+  const passes = [
+    { name: 'P1-contrast',   run: () => preprocessPass1(dataUrl, signal) },
+    { name: 'P2-otsu',       run: () => preprocessPass2(dataUrl, signal) },
+    { name: 'P3-threshold',  run: () => preprocessPass3(dataUrl, 130, signal) }
+  ];
+
+  for (const pass of passes) {
+    _checkAborted(signal);
+    attempts++;
+
+    try {
+      const statusDesc = document.getElementById('ocrStatusDesc');
+      if (statusDesc) statusDesc.innerText = `Đang nhận diện (${pass.name})...`;
+
+      const preprocessed = await pass.run();
+      _checkAborted(signal);
+
+      const text = await ocrRecognize(preprocessed, signal);
+      _checkAborted(signal);
+
+      const parsed = parseFromText(text);
+      const scoreBundle = scoreResult(parsed);
+
+      const bundle = { parsed, rawText: text, scoreBundle, passName: pass.name };
+
+      // Nếu pass này ≥ threshold auto-save → dừng ngay
+      if (scoreBundle.score.final >= SCORE_AUTO_SAVE) {
+        bestBundle = bundle;
+        bestScore  = scoreBundle.score.final;
+        break;
+      }
+
+      // Lưu best
+      if (scoreBundle.score.final > bestScore) {
+        bestScore  = scoreBundle.score.final;
+        bestBundle = bundle;
+      }
+    } catch (err) {
+      if (err.message === 'OCR_CANCELLED') throw err;
+      console.warn(`[OCR] Pass ${pass.name} lỗi:`, err.message);
+      // Tiếp tục pass sau
+    }
+  }
+
+  // Không pass nào chạy được
+  if (!bestBundle) {
+    return {
+      file: file.name,
+      thumbnail,
+      result: null,
+      error: 'Không đọc được ảnh (3 pass đều lỗi)'
+    };
+  }
+
+  // ---- 5. Build final result ----
+  const result = buildFinalResult({
+    parsed:          bestBundle.parsed,
+    rawText:         bestBundle.rawText,
+    detectedColorType,
+    tabConfidence,
+    scoreBundle:     bestBundle.scoreBundle,
+    attempts,
+    blobUrl
+  });
+
+  // ---- 6. Cache (KHÔNG cache blobUrl) ----
+  cacheSet(hash, {
+    thumbnail,
+    result: { ...result, imageBlobUrl: '', fullDataUrl: '' }
+  });
+
+  return { file: file.name, thumbnail, result, error: null };
+}
+
+// ==================== AUTO-SAVE ====================
 async function tryAutoSave(r) {
-  const confs = Object.values(r.confidences).filter(c => c != null);
-  if (confs.length === 0) return false;
-  const allHigh = confs.every(c => c >= 85);
-  if (!allHigh) return false;
-
-  if (r.expectedTotal !== null && r.expectedTotal !== r.totalFound) return false;
-  if (r.totalFound <= 0) return false;
-
-  const dist = validateDistribution(r.weights);
-  if (!dist.ok) return false;
+  if (!r.detectedColorType) return false;
+  if (r.score.final < SCORE_AUTO_SAVE) return false;
+  if (r.actualTotal <= 0) return false;
 
   const type = getTypeFromResult(r);
+  if (!type) return false;
+
   const weights = buildWeights(r);
   const newId = generateId();
 
@@ -704,142 +1409,229 @@ async function tryAutoSave(r) {
   return true;
 }
 
-// ==================== PIPELINE DÙNG CHUNG ====================
 /**
- * Xử lý một mảng File qua pipeline OCR + auto-save / batch
- * Dùng chung cho cả `<input>` và Share Target.
- *
- * @param {File[]} files     - Mảng File ảnh (đã lọc hợp lệ)
- * @param {boolean} wasAppend - true nếu đang append vào batch hiện có
+ * Force save — dùng khi user bấm "Lưu luôn" trong review modal
+ * (bỏ qua ngưỡng score, nhưng vẫn cần có detectedColorType)
  */
-async function _runOcrFromFiles(files, wasAppend = false) {
-  if (!files || files.length === 0) return;
+async function tryAutoSaveForce(r) {
+  if (!r.detectedColorType) return false;
+  const type = getTypeFromResult(r);
+  if (!type) return false;
 
-  const overlay = document.getElementById('ocrLoadingOverlay');
-  if (overlay) overlay.style.display = 'flex';
+  const weights = buildWeights(r);
+  const newId = generateId();
 
-  try {
-    const newResults = await processFiles(files);
-    if (overlay) overlay.style.display = 'none';
-
-    const autoSaved = [];
-    const duplicates = [];
-    const needAttention = [];
-
-    for (const item of newResults) {
-      if (item.error) {
-        needAttention.push(item);
-        continue;
+  const pushUndoFn = await ensurePushUndo();
+  if (pushUndoFn) {
+    pushUndoFn({
+      msg: `OCR lưu ${getTypeLabel(r)} ${formatDateDisplay(r.parsedDate)}`,
+      restore: () => {
+        state.appData[type] = state.appData[type].filter(it => it.id !== newId);
       }
-      const r = item.result;
+    });
+  }
 
-      if (findExactDuplicate(r)) {
-        duplicates.push(item);
-        continue;
+  state.appData[type].unshift({ id: newId, date: r.parsedDate, weights });
+  updateAllViews();
+  return true;
+}
+
+// ==================== TAB PICKER MODAL (dynamic) ====================
+function showTabPickerModal() {
+  return new Promise(resolve => {
+    const style = document.createElement('style');
+    style.textContent = `
+      .tab-picker-btn {
+        padding: 14px 16px;
+        border-radius: 12px;
+        border: 1px solid var(--border);
+        background: var(--surface);
+        color: var(--text-1);
+        font-size: 13.5px;
+        font-weight: 600;
+        font-family: inherit;
+        text-align: left;
+        cursor: pointer;
+        transition: all 0.15s;
       }
+      .tab-picker-btn:hover {
+        border-color: var(--accent);
+        background: var(--accent-soft);
+      }
+      .tab-picker-btn:active { transform: scale(0.98); }
+      .tab-picker-btn.skip { color: var(--danger); }
+      .tab-picker-btn.skip:hover {
+        background: var(--danger-bg);
+        border-color: var(--danger-bd);
+      }
+    `;
+    document.head.appendChild(style);
 
-      if (await tryAutoSave(r)) {
-        autoSaved.push(item);
+    const shade = document.createElement('div');
+    shade.className = 'modal-shade active';
+    shade.style.zIndex = '500';
+    shade.innerHTML = `
+      <div class="modal-box" style="max-width:380px;border-radius:20px;margin:auto 16px;">
+        <div class="modal-box-head">
+          <h3>Chọn loại đơn</h3>
+        </div>
+        <div class="modal-body" style="padding:20px">
+          <p style="font-size:13px;color:var(--text-2);margin-bottom:16px;text-align:center;line-height:1.5">
+            Không nhận diện được tab từ ảnh này.<br>
+            Ảnh này là đơn gì?
+          </p>
+          <div style="display:flex;flex-direction:column;gap:10px">
+            <button class="tab-picker-btn" data-type="del">🚚 Giao — Đơn giao hàng</button>
+            <button class="tab-picker-btn" data-type="pick">📦 Lấy — Đơn lấy hàng</button>
+            <button class="tab-picker-btn" data-type="ret">↩️ Hoàn — Đơn hoàn</button>
+            <button class="tab-picker-btn skip" data-type="skip">🗑️ Bỏ ảnh này</button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    shade.querySelectorAll('.tab-picker-btn').forEach(btn => {
+      btn.onclick = () => {
+        const type = btn.dataset.type;
+        document.body.removeChild(shade);
+        resolve(type === 'skip' ? null : type);
+      };
+    });
+
+    document.body.appendChild(shade);
+  });
+}
+
+// ==================== REVIEW MODAL (dynamic) ====================
+function showReviewModal(item) {
+  return new Promise(resolve => {
+    const r = item.result;
+
+    const style = document.createElement('style');
+    style.textContent = `
+      .review-btn {
+        flex: 1;
+        padding: 12px;
+        border-radius: 10px;
+        font-size: 13px;
+        font-weight: 700;
+        font-family: inherit;
+        cursor: pointer;
+        border: 1px solid;
+        transition: all 0.15s;
+      }
+      .review-btn-edit {
+        background: var(--surface);
+        border-color: var(--border);
+        color: var(--text-1);
+      }
+      .review-btn-edit:hover { border-color: var(--accent); color: var(--accent); }
+      .review-btn-save {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #fff;
+      }
+      .review-btn-save:hover { filter: brightness(0.95); }
+      .review-btn:active { transform: scale(0.97); }
+    `;
+    document.head.appendChild(style);
+
+    let warningsHtml = '';
+    if (r.distWarnings && r.distWarnings.length > 0) {
+      warningsHtml = `<div style="background:var(--warning-bg);border:1px solid var(--warning-bd);border-radius:10px;padding:10px 12px;margin-bottom:14px;font-size:11.5px;color:var(--warning);line-height:1.6">
+        ${r.distWarnings.map(w => '⚠️ ' + w).join('<br>')}
+      </div>`;
+    }
+
+    const scoreColor = r.score.final >= 90 ? 'var(--success)' : 'var(--warning)';
+
+    const shade = document.createElement('div');
+    shade.className = 'modal-shade active';
+    shade.style.zIndex = '500';
+    shade.innerHTML = `
+      <div class="modal-box" style="max-width:400px;border-radius:20px;margin:auto 16px;">
+        <div class="modal-box-head">
+          <h3>⚠️ Cần kiểm tra</h3>
+        </div>
+        <div class="modal-body" style="padding:20px">
+          <div style="text-align:center;margin-bottom:16px">
+            <div style="font-size:34px;font-weight:800;font-family:'JetBrains Mono',monospace;color:${scoreColor};line-height:1">
+              ${r.score.final}<span style="font-size:16px;color:var(--text-3)">/100</span>
+            </div>
+            <div style="font-size:11px;color:var(--text-3);margin-top:4px;letter-spacing:0.5px;text-transform:uppercase">Điểm tin cậy</div>
+          </div>
+
+          <div style="background:var(--surface-2);border-radius:10px;padding:12px 14px;margin-bottom:14px;font-size:12.5px;line-height:1.8">
+            <div><b>Loại:</b> ${getTypeLabel(r)}</div>
+            <div><b>Ngày:</b> ${formatDateDisplay(r.parsedDate)}</div>
+            <div><b>Tổng OCR:</b> ${r.actualTotal} đơn</div>
+            <div><b>Tổng ảnh:</b> ${r.expectedTotal !== null ? r.expectedTotal + ' đơn' : '—'}</div>
+            <div><b>Checksum:</b> ${r.score.checksumOk ? '✅ Khớp' : '❌ Không khớp'}</div>
+          </div>
+
+          ${warningsHtml}
+
+          <div style="font-size:11px;color:var(--text-3);margin-bottom:14px;font-family:'JetBrains Mono',monospace">
+            Total ${r.score.total} · Structure ${r.score.structure} · OCR ${r.score.ocr} · Dist ${r.score.distribution}
+          </div>
+
+          <div style="display:flex;gap:8px">
+            <button class="review-btn review-btn-edit">✏️ Sửa</button>
+            <button class="review-btn review-btn-save">✅ Lưu luôn</button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    shade.querySelector('.review-btn-edit').onclick = () => {
+      document.body.removeChild(shade);
+      fillModalFromResult(item);
+      resolve('edit');
+    };
+
+    shade.querySelector('.review-btn-save').onclick = async () => {
+      document.body.removeChild(shade);
+      if (await tryAutoSaveForce(r)) {
+        showToast(`Đã lưu ${getTypeLabel(r)} ${formatDateDisplay(r.parsedDate)}`, 'success', 2500);
       } else {
-        needAttention.push(item);
+        showToast('Không lưu được — thiếu loại đơn', 'error', 2500);
       }
-    }
+      resolve('saved');
+    };
 
-    // ===== Trường hợp còn ảnh cần check =====
-    if (needAttention.length > 0) {
-      if (wasAppend) {
-        batchResults.push(...needAttention);
-        renderBatchList();
-        document.getElementById('batchOcrModal').classList.add('active');
-        showSummaryToast(autoSaved.length, duplicates.length, needAttention.length);
-        return;
-      }
-
-      // Ảnh đơn lẻ lỗi / cần check
-      if (files.length === 1) {
-        const item = newResults[0];
-        if (item.error) {
-          showToast('Không đọc được ảnh: ' + item.error, 'error', 3000);
-          return;
-        }
-        fillModalFromResult(item);
-        return;
-      }
-
-      batchResults = needAttention;
-      openBatchOcrModal();
-      showSummaryToast(autoSaved.length, duplicates.length, needAttention.length, 400);
-      return;
-    }
-
-    // ===== Tất cả đều pass hoặc dup =====
-    if (files.length === 1) {
-      const item = newResults[0];
-      const r = item.result;
-      if (duplicates.length === 1) {
-        showToast(
-          `Ảnh đã tồn tại — ${getTypeLabel(r)} ${formatDateDisplay(r.parsedDate)}: ${r.totalFound} đơn`,
-          'warning', 2500
-        );
-        return;
-      }
-      return;
-    }
-
-    if (autoSaved.length > 0 || duplicates.length > 0) {
-      showSummaryToast(autoSaved.length, duplicates.length, 0);
-    }
-  } catch (err) {
-    console.error(err);
-    if (overlay) overlay.style.display = 'none';
-    showToast('Lỗi khi quét ảnh', 'error', 3000);
-  }
+    document.body.appendChild(shade);
+  });
 }
 
-// ==================== ENTRY: INPUT FILE ====================
-export async function handleOcrImage(event) {
-  const files = Array.from(event.target.files || []);
-  event.target.value = '';
-  if (files.length === 0) { pendingAppend = false; return; }
+// ==================== CANCEL BUTTON (inject vào overlay) ====================
+function ensureCancelButton() {
+  const overlay = document.getElementById('ocrLoadingOverlay');
+  if (!overlay) return;
 
-  const wasAppend = pendingAppend;
-  pendingAppend = false;
+  let btn = overlay.querySelector('.ocr-cancel-btn');
+  if (btn) return;
 
-  await _runOcrFromFiles(files, wasAppend);
-}
-
-// ==================== ENTRY: SHARE TARGET (SPX-F) ====================
-/**
- * Nhận File[] trực tiếp từ Share Target (manifest.share_target)
- * Gọi bởi main.js khi phát hiện share từ Gallery → chọn SPX Tracker.
- *
- * @param {File[]|FileList} sharedFiles
- */
-export async function handleSharedImage(sharedFiles) {
-  const arr = Array.from(sharedFiles || []);
-  if (arr.length === 0) {
-    showToast('Không nhận được ảnh từ chia sẻ', 'warning', 2500);
-    return;
-  }
-
-  // Lọc chỉ nhận file ảnh (bỏ text/URL/file khác)
-  const images = arr.filter(f => f && f.type && f.type.startsWith('image/'));
-  const skipped = arr.length - images.length;
-
-  if (images.length === 0) {
-    showToast(
-      skipped > 0 ? 'Chia sẻ không chứa ảnh — bỏ qua' : 'Không có file hợp lệ',
-      'error', 3000
-    );
-    return;
-  }
-
-  if (skipped > 0) {
-    showToast(`Bỏ qua ${skipped} mục không phải ảnh`, 'warning', 2000);
-  }
-
-  // Batch chỉ dùng khi share nhiều ảnh + cần check
-  await _runOcrFromFiles(images, false);
+  btn = document.createElement('button');
+  btn.className = 'ocr-cancel-btn';
+  btn.innerText = '✕ Hủy';
+  btn.style.cssText = `
+    margin-top: 22px;
+    padding: 10px 26px;
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    background: rgba(255, 255, 255, 0.1);
+    color: #fff;
+    font-size: 13px;
+    font-weight: 700;
+    font-family: inherit;
+    cursor: pointer;
+    backdrop-filter: blur(4px);
+    transition: all 0.15s;
+  `;
+  btn.onmouseenter = () => { btn.style.background = 'rgba(255,255,255,0.18)'; };
+  btn.onmouseleave = () => { btn.style.background = 'rgba(255,255,255,0.1)'; };
+  btn.onclick = () => cancelOcr();
+  overlay.appendChild(btn);
 }
 
 // ==================== SUMMARY TOAST ====================
@@ -861,103 +1653,232 @@ function showSummaryToast(saved, dup, need, delayMs = 0) {
   else fire();
 }
 
-// ==================== PROCESS FILES ====================
-async function processFiles(files) {
-  const out = [];
+// ==================== PIPELINE CHUNG ====================
+/**
+ * Chạy OCR cho mảng File, route kết quả theo score
+ */
+async function _runOcrFromFiles(files, wasAppend = false) {
+  if (!files || files.length === 0) return;
+
+  const ctrl = _newAbortController();
+  const signal = ctrl.signal;
+
+  const overlay = document.getElementById('ocrLoadingOverlay');
   const statusTitle = document.getElementById('ocrStatusTitle');
   const statusDesc  = document.getElementById('ocrStatusDesc');
-  if (statusTitle) statusTitle.innerText = 'Đang khởi tạo...';
-  if (statusDesc)  statusDesc.innerText  = cachedTesseractWorker ? 'Worker sẵn sàng' : 'Lần đầu tải ~15MB...';
 
-  await getTesseractWorker();
+  if (overlay) overlay.style.display = 'flex';
+  ensureCancelButton();
 
-  for (let i = 0; i < files.length; i++) {
-    const file = files[i];
-    if (statusTitle) statusTitle.innerText = `Ảnh ${i + 1}/${files.length}`;
-    if (statusDesc)  statusDesc.innerText  = 'Đang đọc file...';
+  try {
+    const results = [];
 
-    try {
-      const hash = await hashBlob(file);
-      const cached = cacheGet(hash);
+    for (let i = 0; i < files.length; i++) {
+      _checkAborted(signal);
+      if (statusTitle) statusTitle.innerText = `Ảnh ${i + 1}/${files.length}`;
+      if (statusDesc)  statusDesc.innerText  = 'Đang xử lý...';
 
-      if (cached) {
-        if (statusDesc) statusDesc.innerText = '⚡ Dùng cache...';
-        const rawDataUrl = await readFileAsDataURL(file);
-        const cachedResult = { ...cached.result, fullDataUrl: rawDataUrl };
-        out.push({ file: file.name, thumbnail: cached.thumbnail, result: cachedResult, error: null, fromCache: true });
+      const item = await processOneFile(files[i], signal);
+      results.push(item);
+    }
+
+    if (overlay) overlay.style.display = 'none';
+
+    // ===== ROUTING =====
+    const autoSaved     = [];
+    const duplicates    = [];  // { item, type: 'exact'|'same_day', existing? }
+    const needAttention = [];  // cần user xác nhận (score <92)
+    const needTab       = [];  // không detect được tab
+
+    for (const item of results) {
+      if (item.error) { needAttention.push(item); continue; }
+      const r = item.result;
+
+      // 1. Chưa detect được tab → cần user chọn
+      if (!r.detectedColorType) {
+        needTab.push(item);
         continue;
       }
 
-      if (statusDesc) statusDesc.innerText = 'Đang đọc file...';
-      const rawDataUrl = await readFileAsDataURL(file);
-
-      if (statusDesc) statusDesc.innerText = 'Xử lý ảnh...';
-      const thumbnail = await makeThumbnail(rawDataUrl, 96);
-
-      if (statusDesc) statusDesc.innerText = 'Xác định tab...';
-      const detectedType = await detectActiveTabByOrangeLine(rawDataUrl);
-
-      if (statusDesc) statusDesc.innerText = 'Quét lần 1...';
-      const pre1 = await preprocessImage(rawDataUrl, { upscale: 2.0, useOtsu: true });
-      const text1 = await ocrRecognize(pre1.dataUrl);
-      const parsed1 = parseOcrText(text1);
-
-      let bestResult = parsed1;
-      let bestText = text1;
-      let bestDiff = parsed1.expectedTotal !== null ? Math.abs(parsed1.totalFound - parsed1.expectedTotal) : 9999;
-
-      if (bestDiff > 0) {
-        if (statusDesc) statusDesc.innerText = 'Quét lần 2...';
-        const pre2 = await preprocessImage(rawDataUrl, { upscale: 2.0, useOtsu: false, threshold: 130 });
-        const text2 = await ocrRecognize(pre2.dataUrl);
-        const parsed2 = parseOcrText(text2);
-        const diff2 = parsed2.expectedTotal !== null ? Math.abs(parsed2.totalFound - parsed2.expectedTotal) : 9999;
-        if (diff2 < bestDiff) { bestResult = parsed2; bestText = text2; bestDiff = diff2; }
+      // 2. Exact duplicate (cùng ngày + cùng type + cùng weights) → skip
+      if (findExactDuplicate(r)) {
+        duplicates.push({ item, kind: 'exact' });
+        continue;
       }
 
-      if (bestDiff > 0) {
-        if (statusDesc) statusDesc.innerText = 'Quét lần 3...';
-        const pre3 = await preprocessImage(rawDataUrl, { upscale: 2.5, useOtsu: false, threshold: 160 });
-        const text3 = await ocrRecognize(pre3.dataUrl);
-        const parsed3 = parseOcrText(text3);
-        const diff3 = parsed3.expectedTotal !== null ? Math.abs(parsed3.totalFound - parsed3.expectedTotal) : 9999;
-        if (diff3 < bestDiff) { bestResult = parsed3; bestText = text3; bestDiff = diff3; }
+      // 3. Cùng ngày + cùng type khác weights → cho compare
+      const sameDay = findSameDaySameType(r);
+      if (sameDay) {
+        duplicates.push({ item, kind: 'same_day', existing: sameDay });
+        continue;
       }
 
-      const result = {
-        detectedColorType: detectedType || 'del',
-        parsedDate: extractDate(bestText),
-        weights: bestResult.weights,
-        confidences: bestResult.confidences,
-        expectedTotal: bestResult.expectedTotal,
-        totalFound: bestResult.totalFound,
-        mode: bestResult.mode,
-        rawText: bestText,
-        fullDataUrl: rawDataUrl
-      };
-
-      out.push({ file: file.name, thumbnail, result, error: null });
-      cacheSet(hash, { thumbnail, result: { ...result, fullDataUrl: '' } });
-    } catch (err) {
-      console.error('[OCR]', file.name, err);
-      out.push({ file: file.name, thumbnail: '', result: null, error: err.message });
+      // 4. Score ≥92 → auto-save
+      if (r.score.final >= SCORE_AUTO_SAVE) {
+        if (await tryAutoSave(r)) {
+          autoSaved.push(item);
+        } else {
+          needAttention.push(item);
+        }
+      } else {
+        needAttention.push(item);
+      }
     }
+
+    // ===== Xử lý needTab trước =====
+    for (const item of needTab) {
+      _checkAborted(signal);
+      const type = await showTabPickerModal();
+      if (type === null) continue; // user bỏ
+
+      item.result.detectedColorType = type;
+      item.result.tabConfidence = 100; // user chọn → confidence cao
+
+      // Re-route
+      if (findExactDuplicate(item.result)) {
+        duplicates.push({ item, kind: 'exact' });
+        continue;
+      }
+      const sameDay = findSameDaySameType(item.result);
+      if (sameDay) {
+        duplicates.push({ item, kind: 'same_day', existing: sameDay });
+        continue;
+      }
+
+      if (item.result.score.final >= SCORE_AUTO_SAVE) {
+        if (await tryAutoSave(item.result)) autoSaved.push(item);
+        else needAttention.push(item);
+      } else {
+        needAttention.push(item);
+      }
+    }
+
+    // ===== Xử lý needAttention =====
+    if (needAttention.length > 0) {
+      // Append mode (đang quét thêm vào batch)
+      if (wasAppend) {
+        batchResults.push(...needAttention);
+        renderBatchList();
+        document.getElementById('batchOcrModal').classList.add('active');
+        showSummaryToast(autoSaved.length, duplicates.length, needAttention.length);
+        return;
+      }
+
+      // Single file → route vào review/manual
+      if (files.length === 1) {
+        const item = needAttention[0];
+        if (item.error) {
+          showToast('Không đọc được ảnh: ' + item.error, 'error', 3000);
+          return;
+        }
+        const r = item.result;
+        if (r.score.final >= SCORE_REVIEW && r.score.final < SCORE_AUTO_SAVE) {
+          await showReviewModal(item);
+        } else {
+          fillModalFromResult(item);
+        }
+        return;
+      }
+
+      // Nhiều file → mở batch modal
+      batchResults = needAttention;
+      openBatchOcrModal();
+      showSummaryToast(autoSaved.length, duplicates.length, needAttention.length, 400);
+      return;
+    }
+
+    // ===== Không có ảnh cần check =====
+    if (files.length === 1) {
+      const item = results[0];
+
+      // Exact duplicate → thông báo
+      if (duplicates.length === 1 && duplicates[0].kind === 'exact') {
+        const r = item.result;
+        showToast(
+          `Ảnh đã tồn tại — ${getTypeLabel(r)} ${formatDateDisplay(r.parsedDate)}: ${r.actualTotal} đơn`,
+          'warning', 2500
+        );
+        return;
+      }
+
+      // Same day khác weights → compare modal
+      if (duplicates.length === 1 && duplicates[0].kind === 'same_day') {
+        await openCompareModal(duplicates[0].item, duplicates[0].existing);
+        return;
+      }
+      return;
+    }
+
+    if (autoSaved.length > 0 || duplicates.length > 0) {
+      showSummaryToast(autoSaved.length, duplicates.length, 0);
+    }
+  } catch (err) {
+    if (overlay) overlay.style.display = 'none';
+
+    if (err.message === 'OCR_CANCELLED') {
+      showToast('Đã hủy OCR', 'warning', 2000);
+      return;
+    }
+
+    console.error('[OCR] Pipeline error:', err);
+    showToast('Lỗi khi quét ảnh: ' + err.message, 'error', 3000);
+  } finally {
+    _clearAbortController(ctrl);
   }
-  return out;
 }
 
-// ==================== FILL MODAL ====================
-export function fillModalFromResult(batchItem) {
-  const r = batchItem.result;
-  state.lastOcrImageDataUrl = r.fullDataUrl || '';
+// ==================== ENTRY: INPUT FILE ====================
+export async function handleOcrImage(event) {
+  const files = Array.from(event.target.files || []);
+  event.target.value = '';
+  if (files.length === 0) { pendingAppend = false; return; }
+
+  const wasAppend = pendingAppend;
+  pendingAppend = false;
+
+  await _runOcrFromFiles(files, wasAppend);
+}
+
+// ==================== ENTRY: SHARE TARGET (SPX-F) ====================
+export async function handleSharedImage(sharedFiles) {
+  const arr = Array.from(sharedFiles || []);
+  if (arr.length === 0) {
+    showToast('Không nhận được ảnh từ chia sẻ', 'warning', 2500);
+    return;
+  }
+
+  const images = arr.filter(f => f && f.type && f.type.startsWith('image/'));
+  const skipped = arr.length - images.length;
+
+  if (images.length === 0) {
+    showToast(
+      skipped > 0 ? 'Chia sẻ không chứa ảnh — bỏ qua' : 'Không có file hợp lệ',
+      'error', 3000
+    );
+    return;
+  }
+
+  if (skipped > 0) {
+    showToast(`Bỏ qua ${skipped} mục không phải ảnh`, 'warning', 2000);
+  }
+
+  await _runOcrFromFiles(images, false);
+}
+
+// ==================== FILL MODAL FROM RESULT ====================
+export function fillModalFromResult(item) {
+  const r = item.result;
+  state.lastOcrImageDataUrl = r.imageBlobUrl || r.fullDataUrl || '';
   state.isOcrScan = true;
 
-  const distCheck = validateDistribution(r.weights);
-
+  // Debug log
   const debugEl = document.getElementById('ocrDebugText');
   if (debugEl) {
-    const modeStr = r.mode ? `[mode: ${r.mode}]` : '';
-    debugEl.innerText = `${modeStr}\n\n${r.rawText || '(không có text)'}`;
+    const scoreStr = `[Score ${r.score.final} — Total ${r.score.total} / Structure ${r.score.structure} / OCR ${r.score.ocr} / Dist ${r.score.distribution}]`;
+    const checksumStr = `[Checksum ${r.score.checksumOk ? 'OK' : 'FAIL'} — Expected ${r.expectedTotal} vs Actual ${r.actualTotal}]`;
+    const tabStr = `[Tab ${r.detectedColorType || '?'} (conf ${r.tabConfidence || 0})]`;
+    const attemptStr = `[Attempts ${r.attempts || 1} · ${r.parseMode || '?'}]`;
+    debugEl.innerText = `${scoreStr}\n${checksumStr}\n${tabStr}\n${attemptStr}\n\n${r.rawText || '(không có text)'}`;
     debugEl.style.display = 'none';
     const toggleBtn = document.getElementById('ocrDebugToggle');
     if (toggleBtn) toggleBtn.innerText = 'Xem log';
@@ -965,9 +1886,9 @@ export function fillModalFromResult(batchItem) {
 
   openAddModal();
   document.getElementById('inputDate').value = r.parsedDate;
-  switchModalSubTab(r.detectedColorType);
+  switchModalSubTab(r.detectedColorType || 'del');
 
-  const prefix = r.detectedColorType === 'del' ? 'del_inp'
+  const prefix = r.detectedColorType === 'del'  ? 'del_inp'
                : r.detectedColorType === 'pick' ? 'pick_inp'
                : 'ret_inp';
   Object.keys(r.weights).forEach(k => {
@@ -975,50 +1896,45 @@ export function fillModalFromResult(batchItem) {
     if (el) el.value = r.weights[k];
   });
 
-  applyConfidenceHighlight(r.confidences, r.detectedColorType);
+  applyConfidenceHighlight(r.confidences, r.detectedColorType || 'del');
 
   const typeText = getTypeLabel(r);
-
-  let msg = `${typeText} ${formatDateDisplay(r.parsedDate)} · ${r.totalFound} đơn`;
-
-  if (r.expectedTotal !== null && r.totalFound !== r.expectedTotal) {
-    msg += ` · lệch ${Math.abs(r.expectedTotal - r.totalFound)}`;
+  let msg = `${typeText} ${formatDateDisplay(r.parsedDate)} · ${r.actualTotal} đơn`;
+  if (r.expectedTotal !== null && r.actualTotal !== r.expectedTotal) {
+    msg += ` · lệch ${Math.abs(r.expectedTotal - r.actualTotal)}`;
   }
-
-  let lowCount = 0, midCount = 0;
-  Object.values(r.confidences).forEach(c => {
-    if (c == null) return;
-    if (c < 70) lowCount++;
-    else if (c < 85) midCount++;
-  });
+  msg += ` · Score ${r.score.final}`;
 
   let toastType = 'success';
-  if (lowCount > 0) { msg += ' · có dải đỏ'; toastType = 'error'; }
-  else if (midCount > 0) { msg += ' · có dải vàng'; toastType = 'warning'; }
-  if (!distCheck.ok) { msg += ' · ⚠️ phân bố bất thường'; toastType = 'error'; }
+  if (r.score.final < SCORE_REVIEW) toastType = 'error';
+  else if (r.score.final < SCORE_AUTO_SAVE) toastType = 'warning';
 
-  if (!distCheck.ok) {
-    showDistributionWarning(distCheck, r.detectedColorType);
+  // Cảnh báo phân bố
+  if (r.distWarnings && r.distWarnings.length > 0) {
+    showDistributionWarning(
+      { warnings: r.distWarnings, suspectKeys: r.suspectKeys || [] },
+      r.detectedColorType || 'del'
+    );
   }
 
   showToast(msg + ' — kiểm tra và lưu', toastType, 3500);
 }
 
+// ==================== DISTRIBUTION WARNING ====================
 function showDistributionWarning(distCheck, detectedType) {
   const old = document.getElementById('distWarningBanner');
   if (old) old.remove();
 
-  const prefix = detectedType === 'del' ? 'del_inp'
+  const prefix = detectedType === 'del'  ? 'del_inp'
                : detectedType === 'pick' ? 'pick_inp' : 'ret_inp';
 
   const suffixMap = {
     '0_2':'0_2','2_4':'2_4','4_6':'4_6','6_8':'6_8',
     '8_10':'8_10','10_12':'10_12','12_15':'12_15','over_15':'over_15'
   };
-  distCheck.suspectKeys.forEach(k => {
+  (distCheck.suspectKeys || []).forEach(k => {
     const inp = document.getElementById(prefix + '_' + suffixMap[k]);
-    if (!inp) return;
-    inp.classList.add('conf-suspect');
+    if (inp) inp.classList.add('conf-suspect');
   });
 
   const banner = document.createElement('div');
@@ -1027,7 +1943,7 @@ function showDistributionWarning(distCheck, detectedType) {
   banner.innerHTML = `
     <div class="dist-warning-title">⚠️ Phân bố bất thường</div>
     <ul class="dist-warning-list">
-      ${distCheck.warnings.map(w => `<li>${w}</li>`).join('')}
+      ${distCheck.warnings.map(w => `<li>${escapeHtml(w)}</li>`).join('')}
     </ul>
     <div class="dist-warning-hint">Đối chiếu với ảnh gốc bên dưới trước khi lưu</div>
   `;
@@ -1038,7 +1954,7 @@ function showDistributionWarning(distCheck, detectedType) {
   }
 }
 
-// ==================== COMPARE ====================
+// ==================== COMPARE MODAL ====================
 function buildCompareText(ocrW, existingW) {
   const suffixToWeight = {
     '0_2':'w0_2','2_4':'w2_4','4_6':'w4_6','6_8':'w6_8',
@@ -1048,7 +1964,7 @@ function buildCompareText(ocrW, existingW) {
     '0_2':'>0-2kg','2_4':'>2-4','4_6':'>4-6','6_8':'>6-8',
     '8_10':'>8-10','10_12':'>10-12','12_15':'>12-15','over_15':'>15'
   };
-  let diffs = [];
+  const diffs = [];
   let matches = 0;
   Object.keys(suffixToWeight).forEach(k => {
     const ocr = parseInt(ocrW[k], 10) || 0;
@@ -1066,14 +1982,18 @@ function buildCompareText(ocrW, existingW) {
 export async function openCompareModal(batchItem, existingRecord) {
   const r = batchItem.result;
   const type = getTypeFromResult(r);
+  if (!type) {
+    fillModalFromResult(batchItem);
+    return;
+  }
 
   openEditModal(type, existingRecord.id);
 
   setTimeout(async () => {
     const previewBox = document.getElementById('ocrPreviewBox');
     const previewImg = document.getElementById('ocrPreviewImg');
-    if (previewBox && previewImg && r.fullDataUrl) {
-      previewImg.src = r.fullDataUrl;
+    if (previewBox && previewImg && (r.imageBlobUrl || r.fullDataUrl)) {
+      previewImg.src = r.imageBlobUrl || r.fullDataUrl;
       previewBox.style.display = 'block';
     }
     const cmp = buildCompareText(r.weights, existingRecord.weights);
@@ -1085,6 +2005,10 @@ export async function openCompareModal(batchItem, existingRecord) {
     await showAlert(msg, { title: 'So sánh OCR', okText: 'Đã hiểu' });
   }, 200);
 }
+
+// ==================== BATCH STATE ====================
+let batchResults = [];
+let pendingAppend = false;
 
 // ==================== BATCH MODAL ====================
 export function openBatchOcrModal() {
@@ -1103,13 +2027,21 @@ function renderBatchList() {
   const list = document.getElementById('batchList');
   list.innerHTML = '';
   document.getElementById('batchCount').innerText = batchResults.length;
+
   if (batchResults.length === 0) {
     list.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-3);font-size:12px">Không có ảnh nào.</div>';
     return;
   }
-  const typeMap = { del: ['Giao', 'tag-delivery'], pick: ['Lấy', 'tag-pickup'], ret: ['Hoàn', 'tag-return'] };
+
+  const typeMap = {
+    del:  ['Giao', 'tag-delivery'],
+    pick: ['Lấy',  'tag-pickup'],
+    ret:  ['Hoàn', 'tag-return']
+  };
+
   batchResults.forEach((item, idx) => {
     const div = document.createElement('div');
+
     if (item.error) {
       div.className = 'batch-item error';
       div.innerHTML = `
@@ -1123,42 +2055,56 @@ function renderBatchList() {
         </div>`;
     } else {
       const r = item.result;
-      const [typeLabel, typeClass] = typeMap[r.detectedColorType];
-      let lowCount = 0, midCount = 0;
-      Object.values(r.confidences).forEach(c => {
-        if (c == null) return;
-        if (c < 70) lowCount++;
-        else if (c < 85) midCount++;
-      });
-      const distCheck = validateDistribution(r.weights);
-      const confIcon  = lowCount > 0 ? ' 🔴' : midCount > 0 ? ' 🟡' : ' 🟢';
-      const warnIcon  = (r.expectedTotal !== null && r.totalFound !== r.expectedTotal) ? ' ⚠️' : '';
-      const distIcon  = !distCheck.ok ? ' 🟠' : '';
+      const score = r.score.final;
+      const scoreIcon = score >= SCORE_AUTO_SAVE ? '🟢'
+                       : score >= SCORE_REVIEW    ? '🟡'
+                       : '🔴';
+      const checksumIcon = r.score.checksumOk ? '' : ' ⚠️';
+      const distIcon = (r.distWarnings && r.distWarnings.length > 0) ? ' 🟠' : '';
       const cacheIcon = item.fromCache ? ' ⚡' : '';
+
+      let typeLabel = '?', typeClass = 'tag-delivery';
+      if (r.detectedColorType && typeMap[r.detectedColorType]) {
+        [typeLabel, typeClass] = typeMap[r.detectedColorType];
+      }
+
       const type = getTypeFromResult(r);
-      const existing = state.appData[type].find(rec => rec.date === r.parsedDate);
-      const actionBtn = existing
-        ? `<button class="batch-btn batch-btn-compare" onclick="importBatchItem(${idx})">🔍 So sánh</button>`
-        : `<button class="batch-btn batch-btn-import" onclick="importBatchItem(${idx})">📝 Nhập</button>`;
+      const existing = type ? state.appData[type].find(rec => rec.date === r.parsedDate) : null;
+
+      let actionBtn;
+      if (!r.detectedColorType) {
+        actionBtn = `<button class="batch-btn batch-btn-import" onclick="importBatchItem(${idx})">📝 Chọn loại</button>`;
+      } else if (existing) {
+        actionBtn = `<button class="batch-btn batch-btn-compare" onclick="importBatchItem(${idx})">🔍 So sánh</button>`;
+      } else {
+        actionBtn = `<button class="batch-btn batch-btn-import" onclick="importBatchItem(${idx})">📝 Nhập</button>`;
+      }
+
       const existingBadge = existing
         ? ` <span style="font-size:9px;padding:1px 6px;border-radius:4px;background:var(--warning-bg);border:1px solid var(--warning-bd);color:var(--warning);font-weight:700">Đã có</span>`
         : '';
+
       div.className = 'batch-item';
       div.innerHTML = `
         <img class="batch-thumb" src="${item.thumbnail}" alt="">
         <div class="batch-info">
           <div class="batch-title">
             <span class="hist-badge-tag ${typeClass}">${typeLabel}</span>
-            <span>${formatDateDisplay(r.parsedDate)}${confIcon}${warnIcon}${distIcon}${cacheIcon}${existingBadge}</span>
+            <span>${formatDateDisplay(r.parsedDate)} ${scoreIcon}${checksumIcon}${distIcon}${cacheIcon}${existingBadge}</span>
           </div>
           <div class="batch-meta">${escapeHtml(item.file)}</div>
-          <div class="batch-total">${r.totalFound} đơn</div>
+          <div class="batch-total">
+            ${r.actualTotal} đơn
+            ${r.expectedTotal !== null ? `<span style="color:var(--text-3);font-weight:500;font-size:11px"> (tổng ảnh: ${r.expectedTotal})</span>` : ''}
+            <span style="color:var(--text-3);font-weight:500;font-size:11px"> · Score ${score}</span>
+          </div>
         </div>
         <div class="batch-actions">
           ${actionBtn}
           <button class="batch-btn batch-btn-remove" onclick="removeBatchItem(${idx})">Bỏ</button>
         </div>`;
     }
+
     list.appendChild(div);
   });
 }
@@ -1169,15 +2115,32 @@ export function removeBatchItem(idx) {
   renderBatchList();
 }
 
-export function importBatchItem(idx) {
+export async function importBatchItem(idx) {
   const item = batchResults[idx];
   if (!item || item.error) return;
   const r = item.result;
-  const type = getTypeFromResult(r);
-  const existing = state.appData[type].find(rec => rec.date === r.parsedDate);
+
   closeBatchOcrModal();
-  if (existing) openCompareModal(item, existing);
-  else fillModalFromResult(item);
+
+  // Chưa có type → tab picker
+  if (!r.detectedColorType) {
+    const type = await showTabPickerModal();
+    if (type === null) {
+      openBatchOcrModal();
+      return;
+    }
+    r.detectedColorType = type;
+    r.tabConfidence = 100;
+  }
+
+  const type = getTypeFromResult(r);
+  const existing = type ? state.appData[type].find(rec => rec.date === r.parsedDate) : null;
+
+  if (existing) {
+    await openCompareModal(item, existing);
+  } else {
+    fillModalFromResult(item);
+  }
   showBackToBatchBtn(true);
 }
 
@@ -1192,10 +2155,12 @@ export function backToBatch() {
   showBackToBatchBtn(false);
   openBatchOcrModal();
 }
+
 export function showBackToBatchBtn(show) {
   const btn = document.getElementById('backToBatchBtn');
   if (btn) btn.style.display = show ? 'inline-flex' : 'none';
 }
+
 export function hasBatchPending() { return batchResults.length > 0; }
 
 // ==================== SAVE BATCH ====================
@@ -1206,9 +2171,12 @@ export async function saveBatchAll() {
   const seenInBatch = new Set();
   const dedupedBatch = [];
   let dupInBatch = 0;
+
   valid.forEach(item => {
     const r = item.result;
-    const key = getTypeFromResult(r) + '|' + r.parsedDate;
+    const type = getTypeFromResult(r);
+    if (!type) { dupInBatch++; return; }
+    const key = type + '|' + r.parsedDate;
     if (seenInBatch.has(key)) { dupInBatch++; return; }
     seenInBatch.add(key);
     dedupedBatch.push(item);
@@ -1217,14 +2185,17 @@ export async function saveBatchAll() {
   const finalList = [];
   let dupExisting = 0;
   let suspectSkipped = 0;
+
   dedupedBatch.forEach(item => {
     const r = item.result;
     const type = getTypeFromResult(r);
-    const existing = state.appData[type].find(rec => rec.date === r.parsedDate);
-    if (existing) { dupExisting++; return; }
+    if (!type) { dupInBatch++; return; }
 
-    const dist = validateDistribution(r.weights);
-    if (!dist.ok) { suspectSkipped++; return; }
+    // Exact duplicate → skip
+    if (findExactDuplicate(r)) { dupExisting++; return; }
+
+    // Same day khác weights → skip (đã có data ngày đó, để user compare riêng)
+    if (findSameDaySameType(r)) { dupExisting++; return; }
 
     finalList.push({ item, type, weights: buildWeights(r) });
   });
@@ -1266,21 +2237,15 @@ export async function saveBatchAll() {
 
   let doneMsg = `Đã lưu ${finalList.length} bản ghi`;
   if (totalSkipped > 0) doneMsg += ` (bỏ qua ${totalSkipped} ảnh)`;
-  if (suspectSkipped > 0) doneMsg += ` · ⚠️ ${suspectSkipped} nghi ngờ`;
   showToast(doneMsg, 'success', 3000);
-}
-
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, c => ({
-    '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
-  }[c]));
 }
 
 // ==================== HIGHLIGHT ====================
 export function applyConfidenceHighlight(confMap, detectedType) {
-  const prefix = detectedType === 'del' ? 'del_inp'
+  const prefix = detectedType === 'del'  ? 'del_inp'
                : detectedType === 'pick' ? 'pick_inp' : 'ret_inp';
   const keys = ['0_2','2_4','4_6','6_8','8_10','10_12','12_15','over_15'];
+
   keys.forEach(k => {
     const input = document.getElementById(prefix + '_' + k);
     if (!input) return;
@@ -1291,9 +2256,11 @@ export function applyConfidenceHighlight(confMap, detectedType) {
       if (old) old.remove();
     }
     if (confMap[k] == null) return;
+
     const conf = confMap[k];
     const level = conf >= 85 ? 'high' : conf >= 70 ? 'mid' : 'low';
     input.classList.add('conf-' + level);
+
     if (parent) {
       const badge = document.createElement('span');
       badge.className = 'conf-badge ' + level;
@@ -1325,6 +2292,14 @@ export function openOcrLightbox() {
   document.getElementById('ocrLightboxImg').src = src;
   document.getElementById('ocrLightbox').classList.add('active');
 }
+
 export function closeOcrLightbox() {
   document.getElementById('ocrLightbox').classList.remove('active');
+}
+
+// ==================== ESCAPE HTML ====================
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({
+    '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
+  }[c]));
 }
