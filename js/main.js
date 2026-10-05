@@ -11,12 +11,19 @@ import {
   openAddModal, openEditModal, closeModal,
   openMenuModal, closeMenuModal,
   openHistoryTab,
-  openHistoryDatePicker, applyHistoryDateFilter, clearHistoryDateFilter,
   openSettingsModal, closeSettingsModal,
   openCoffeeModal, closeCoffeeModal, copyBankNumber,
   toggleThemeFromMenu,
   initPeriodLabelLongPress,
-  toggleOcrDebugText
+  toggleOcrDebugText,
+  // v50.11.0: SPX-F
+  openShareTargetModal, closeShareTargetModal,
+  // v50.11.0: SPX-H filter panel
+  openHistoryFilterPanel, closeHistoryFilterPanel,
+  quickPickDateRange, quickPickOrders,
+  toggleFilterType, pickFilterScore,
+  resetHistoryFilterPanel, applyHistoryFilterPanel,
+  clearAllHistoryFilters
 } from './ui.js';
 import {
   handleOcrImage, preloadTesseractWorker,
@@ -24,7 +31,9 @@ import {
   openBatchOcrModal, closeBatchOcrModal, appendBatchFiles,
   saveBatchAll, importBatchItem, removeBatchItem,
   backToBatch, hasBatchPending, showBackToBatchBtn,
-  clearOcrCache, getOcrCacheStats
+  clearOcrCache, getOcrCacheStats,
+  // v50.11.0: SPX-F
+  handleSharedImage
 } from './ocr.js';
 import { saveRecord, deleteRecord, clearAllHistory } from './entry.js';
 import {
@@ -167,6 +176,8 @@ function _initHeroExpandState() {
 function _showIncomeInfo() {
   showAlert(
     'Lương 1 công = (LCB + Bưu cục + Tài xế) / số ngày tối đa\n\n' +
+    '⚡ Tài xế CHỈ được cộng khi đơn Giao ≥ 1.500/tháng.\n' +
+    'Nếu < 1.500 → không cộng Tài xế vào lương.\n\n' +
     'Đã tích lũy = Lương 1 công × số công\n\n' +
     'Quy đổi: Giao + Lấy/6 + Hoàn\n' +
     '• Miền: ≥60 = 1 công, ≥30 = 0.5 công\n' +
@@ -278,6 +289,143 @@ async function applyUpdate() {
   }
 }
 
+// ================ v50.11.0: SHARE TARGET LAUNCH (SPX-F) ================
+const SHARED_CACHE_NAME = 'spx-shared-files';
+const SHARED_QUERY_KEY = 'shared';
+
+/**
+ * Phát hiện app được mở từ Share Target
+ * - URL có ?shared=1 → SW đã redirect về đây
+ * - Hoặc pathname kết thúc bằng /share-target (khi SW chưa kịp redirect)
+ */
+function _detectShareTargetLaunch() {
+  try {
+    const url = new URL(window.location.href);
+    const hasSharedQuery = url.searchParams.get(SHARED_QUERY_KEY) === '1';
+    const isShareTargetPath = /\/share-target\/?$/.test(url.pathname);
+    return hasSharedQuery || isShareTargetPath;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Đọc File[] từ Cache API 'spx-shared-files'
+ * SW ghi vào cache này sau khi nhận POST multipart/form-data
+ * @returns {Promise<File[]>}
+ */
+async function _consumeSharedFiles() {
+  if (!('caches' in window)) return [];
+
+  try {
+    const cache = await caches.open(SHARED_CACHE_NAME);
+    const keys = await cache.keys();
+
+    if (keys.length === 0) return [];
+
+    const files = [];
+    const consumedKeys = [];
+
+    // Key đầu tiên chứa metadata: /spx-shared-meta
+    // Key sau là từng file: /spx-shared-file-0, /spx-shared-file-1, ...
+    const metaReq = keys.find(req => req.url.endsWith('/spx-shared-meta'));
+    let meta = { count: 0, names: [], types: [] };
+
+    if (metaReq) {
+      try {
+        const metaRes = await cache.match(metaReq);
+        if (metaRes) meta = await metaRes.json();
+      } catch (e) {
+        console.warn('[ShareTarget] Parse meta lỗi:', e);
+      }
+      consumedKeys.push(metaReq);
+    }
+
+    // Lấy từng file theo thứ tự
+    for (let i = 0; i < (meta.count || 0); i++) {
+      const req = keys.find(r => r.url.endsWith(`/spx-shared-file-${i}`));
+      if (!req) continue;
+
+      const res = await cache.match(req);
+      if (!res) continue;
+
+      const blob = await res.blob();
+      const name = meta.names?.[i] || `shared_${i}.jpg`;
+      const type = meta.types?.[i] || blob.type || 'image/jpeg';
+
+      const file = new File([blob], name, { type });
+      files.push(file);
+      consumedKeys.push(req);
+    }
+
+    // Dọn cache các key đã lấy
+    await Promise.all(consumedKeys.map(req => cache.delete(req)));
+
+    // Nếu cache còn key nào của shared (không khớp pattern), dọn luôn
+    const remaining = await cache.keys();
+    await Promise.all(
+      remaining
+        .filter(req => req.url.includes('/spx-shared-'))
+        .map(req => cache.delete(req))
+    );
+
+    return files;
+  } catch (e) {
+    console.warn('[ShareTarget] Đọc cache lỗi:', e);
+    return [];
+  }
+}
+
+/**
+ * Xóa query ?shared=1 khỏi URL để không trigger lại khi reload
+ */
+function _cleanShareQueryFromUrl() {
+  try {
+    const url = new URL(window.location.href);
+    if (url.searchParams.has(SHARED_QUERY_KEY)) {
+      url.searchParams.delete(SHARED_QUERY_KEY);
+      window.history.replaceState({}, document.title, url.pathname + url.search + url.hash);
+    }
+  } catch {}
+}
+
+/**
+ * Entry: chạy pipeline share target
+ */
+async function _runShareTargetIfNeeded() {
+  if (!_detectShareTargetLaunch()) return;
+
+  console.log('[ShareTarget] Phát hiện launch từ chia sẻ ảnh');
+
+  // Delay nhỏ để DOM + Tesseract worker kịp chuẩn bị
+  await new Promise(r => setTimeout(r, 400));
+
+  const files = await _consumeSharedFiles();
+
+  _cleanShareQueryFromUrl();
+
+  if (files.length === 0) {
+    console.warn('[ShareTarget] Không có file trong cache');
+    showAlert(
+      'Không đọc được ảnh từ chia sẻ.\n\n' +
+      'Hãy:\n' +
+      '• Share lại từ Gallery\n' +
+      '• Hoặc mở app → bấm 📷 để chọn ảnh thủ công',
+      { title: '📤 Chia sẻ ảnh', okText: 'Đã hiểu' }
+    );
+    return;
+  }
+
+  console.log(`[ShareTarget] Nhận ${files.length} file — bắt đầu OCR`);
+  try {
+    await handleSharedImage(files);
+  } catch (e) {
+    console.error('[ShareTarget] Lỗi pipeline:', e);
+    showAlert('Lỗi xử lý ảnh chia sẻ: ' + e.message, { title: 'Lỗi', okText: 'Đóng' });
+  }
+}
+// ================ /SHARE TARGET LAUNCH ================
+
 // ================ EXPOSE TO WINDOW ================
 Object.assign(window, {
   toggleTheme,
@@ -309,11 +457,24 @@ Object.assign(window, {
   clearOcrCacheFromSettings: _clearOcrCacheFromSettings,
   updateOcrCacheStats: _updateOcrCacheStats,
 
-  // v50.9.0: Reminder banner + History date filter
+  // Reminder banner
   dismissReminderBanner,
-  openHistoryDatePicker,
-  applyHistoryDateFilter,
-  clearHistoryDateFilter,
+
+  // v50.11.0: SPX-F Share Target
+  openShareTargetModal,
+  closeShareTargetModal,
+  handleSharedImage,
+
+  // v50.11.0: SPX-H Filter panel
+  openHistoryFilterPanel,
+  closeHistoryFilterPanel,
+  quickPickDateRange,
+  quickPickOrders,
+  toggleFilterType,
+  pickFilterScore,
+  resetHistoryFilterPanel,
+  applyHistoryFilterPanel,
+  clearAllHistoryFilters,
 
   // REGION — inline onclick
   changeRegion: function(regionKey, el) {
@@ -375,12 +536,17 @@ Object.assign(window, {
     updateAllViews();
 
     const [y, m] = state.currentMonth.split('-');
+    const taiXeNote = taiXe > 0
+      ? `\n⚡ Tài xế chỉ được cộng khi đơn Giao ≥ 1.500/tháng.`
+      : '';
+
     showAlert(
       `Đã lưu cấu hình cho Tháng ${parseInt(m, 10)}/${y}!\n\n` +
       `• Lương:   ${salary.toLocaleString('vi-VN')}\n` +
       `• Bưu cục: ${buuCuc.toLocaleString('vi-VN')}\n` +
       `• Tài xế:  ${taiXe.toLocaleString('vi-VN')}\n` +
-      `• Khu vực: ${state.region === 'hcm_hn' ? 'TP.HCM & HN' : 'Miền'}`,
+      `• Khu vực: ${state.region === 'hcm_hn' ? 'TP.HCM & HN' : 'Miền'}` +
+      taiXeNote,
       { title: 'Đã lưu cấu hình', okText: 'OK' }
     );
   },
@@ -399,7 +565,7 @@ window.openSettingsModal = function() {
 };
 
 // ================ INIT ================
-(function init() {
+(async function init() {
   loadState();
   initTheme();
   initRankUI();
@@ -416,4 +582,7 @@ window.openSettingsModal = function() {
   registerSW();
   setTimeout(checkVersion, 2000);
   setInterval(checkVersion, 5 * 60 * 1000);
+
+  // v50.11.0: Xử lý share target (nếu app được mở từ Gallery)
+  _runShareTargetIfNeeded();
 })();
