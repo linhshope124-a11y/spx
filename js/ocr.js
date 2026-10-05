@@ -1,5 +1,5 @@
 // =============================================================
-// OCR ENGINE v2 — PART 1/3
+// OCR ENGINE v2.1 — PART 1/3
 // Config · AbortController · Worker · Cache
 // =============================================================
 
@@ -11,20 +11,18 @@ import { updateAllViews } from './render.js';
 import { showAlert, showConfirm } from './dialog.js';
 
 // ==================== CONFIG ====================
-const OCR_CACHE_VERSION = 'v2';        // bump khi đổi parser
-const OCR_TIMEOUT_MS    = 30000;        // 30s cho 1 lần recognize
+const OCR_CACHE_VERSION = 'v3';        // bump khi đổi parser
+const OCR_TIMEOUT_MS    = 30000;
 const OCR_CACHE_MAX     = 200;
 const LS_CACHE_PREFIX   = 'spx_ocr_cache_';
 const LS_CACHE_INDEX    = 'spx_ocr_cache_index';
 const LS_CACHE_MAX_BYTES = 4 * 1024 * 1024;
 
-// Score thresholds
 const SCORE_AUTO_SAVE = 92;
 const SCORE_REVIEW    = 85;
-const SCORE_MAX_CHECKSUM_FAIL = 84;    // cap khi checksum fail → vào Manual
+const SCORE_MAX_CHECKSUM_FAIL = 84;
 
 // ==================== 8 DẢI KHỐI LƯỢNG SPX ====================
-// Format thật từ ảnh: "0.000 - 2.001", "15.001 - 999999.000"
 const SPX_RANGES = [
   { key: '0_2',     min: 0,  max: 2,      display: '0.000 - 2.001' },
   { key: '2_4',     min: 2,  max: 4,      display: '2.001 - 4.001' },
@@ -36,7 +34,6 @@ const SPX_RANGES = [
   { key: 'over_15', min: 15, max: 999999, display: '15.001 - 999999.000' }
 ];
 
-// Map giá trị min (int) → key dải
 const RANGE_KEY_BY_MIN = {
   0: '0_2',   2: '2_4',    4: '4_6',    6: '6_8',
   8: '8_10',  10: '10_12', 12: '12_15', 15: 'over_15'
@@ -75,10 +72,6 @@ function _clearAbortController(ctrl) {
 let cachedTesseractWorker = null;
 let workerLoadingPromise  = null;
 
-/**
- * Khởi tạo worker (cache lại, tái sử dụng cho mọi ảnh)
- * Tesseract v5 tự load asset từ CDN jsdelivr (theo script trong index.html)
- */
 async function getTesseractWorker() {
   if (cachedTesseractWorker) return cachedTesseractWorker;
   if (workerLoadingPromise)  return workerLoadingPromise;
@@ -118,9 +111,6 @@ async function getTesseractWorker() {
   }
 }
 
-/**
- * Reset worker — dùng khi worker crash / lỗi không hồi phục
- */
 async function resetTesseractWorker() {
   if (cachedTesseractWorker) {
     try { await cachedTesseractWorker.terminate(); } catch {}
@@ -208,13 +198,12 @@ async function hashBlob(file) {
     return Array.from(new Uint8Array(hashBuf))
       .map(b => b.toString(16).padStart(2, '0')).join('');
   } catch {
-    // Fallback: name + size + lastModified
     return 'fb_' + Date.now().toString(16) + '_' + file.size + '_' +
            (file.name || '').length + '_' + (file.lastModified || 0);
   }
 }
 
-// ==================== CACHE 2 TẦNG (RAM + localStorage) ====================
+// ==================== CACHE 2 TẦNG ====================
 const ocrCache = new Map();
 
 function _cacheKey(hash) {
@@ -249,7 +238,7 @@ function estimateLocalStorageBytes() {
       const val = localStorage.getItem(key);
       if (val) total += key.length + val.length;
     }
-    return total * 2; // UTF-16
+    return total * 2;
   } catch {
     return 0;
   }
@@ -290,7 +279,6 @@ function pruneCacheIfNeeded() {
 function cacheGet(hash) {
   const key = _cacheKey(hash);
 
-  // 1) RAM
   if (ocrCache.has(key)) {
     const v = ocrCache.get(key);
     const index = readCacheIndex();
@@ -303,7 +291,6 @@ function cacheGet(hash) {
     return v;
   }
 
-  // 2) localStorage
   try {
     const raw = localStorage.getItem(LS_CACHE_PREFIX + key);
     if (raw) {
@@ -349,7 +336,7 @@ function cacheSet(hash, value) {
   }
 }
 
-// ==================== XÓA CACHE OCR (user) ====================
+// ==================== XÓA CACHE OCR ====================
 export async function clearOcrCache() {
   const ok = await showConfirm(
     'Xóa toàn bộ cache OCR?\n\n' +
@@ -378,7 +365,6 @@ export async function clearOcrCache() {
     console.warn('[OCR Cache] Xóa lỗi:', e.message);
   }
 
-  // Dọn sạch hết các key còn sót
   try {
     let actualCount = 0;
     const toRemove = [];
@@ -412,15 +398,11 @@ export function getOcrCacheStats() {
   };
 }
 // =============================================================
-// OCR ENGINE v2 — PART 2/3
+// OCR ENGINE v2.1 — PART 2/3
 // Image · Preprocess · Parser · Validation · Scoring
 // =============================================================
 
 // ==================== IMAGE HELPERS ====================
-
-/**
- * Load ảnh → trả về { img, width, height }
- */
 function loadImage(src) {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -431,9 +413,6 @@ function loadImage(src) {
   });
 }
 
-/**
- * Đọc File → DataURL (chỉ dùng khi cần lưu preview)
- */
 function readFileAsDataURL(file) {
   return new Promise((resolve, reject) => {
     const r = new FileReader();
@@ -443,9 +422,6 @@ function readFileAsDataURL(file) {
   });
 }
 
-/**
- * Tạo thumbnail nhỏ từ DataURL
- */
 function makeThumbnail(dataUrl, maxW = 96) {
   return new Promise(resolve => {
     const img = new Image();
@@ -466,23 +442,14 @@ function makeThumbnail(dataUrl, maxW = 96) {
 }
 
 // ==================== DETECT ACTIVE TAB ====================
-// Gạch cam dưới tab active:
-//   Đã giao hàng  [trái]   0-33%
-//   Đã lấy        [giữa]  33-66%
-//   Đã trả hàng   [phải]  66-100%
-
 const TAB_ZONES = [
   { type: 'del',  min: 0.00, max: 0.33 },
   { type: 'pick', min: 0.33, max: 0.66 },
   { type: 'ret',  min: 0.66, max: 1.00 }
 ];
 
-const TAB_MIN_CONFIDENCE = 60; // nếu < 60 → trả null, user chọn
+const TAB_MIN_CONFIDENCE = 60;
 
-/**
- * Detect tab active qua gạch cam dưới tab
- * @returns {Promise<{type: string, confidence: number} | null>}
- */
 function detectActiveTab(imageSource) {
   return new Promise(resolve => {
     const img = new Image();
@@ -495,7 +462,6 @@ function detectActiveTab(imageSource) {
         const ctx = canvas.getContext('2d', { willReadFrequently: true });
         ctx.drawImage(img, 0, 0);
 
-        // Quét dải 10-20% chiều cao (khu vực tab bar + gạch cam dưới)
         const scanY1 = Math.floor(img.height * 0.10);
         const scanY2 = Math.floor(img.height * 0.20);
         const scanH  = scanY2 - scanY1;
@@ -503,7 +469,6 @@ function detectActiveTab(imageSource) {
         const imgData = ctx.getImageData(0, scanY1, img.width, scanH);
         const data = imgData.data;
 
-        // Đếm pixel cam theo từng cột
         const colCount = new Array(img.width).fill(0);
         let totalOrange = 0;
 
@@ -511,7 +476,6 @@ function detectActiveTab(imageSource) {
           for (let x = 0; x < img.width; x++) {
             const idx = (y * img.width + x) * 4;
             const r = data[idx], g = data[idx+1], b = data[idx+2];
-            // Cam: r cao, g vừa, b thấp, r-g đủ lớn
             if (r > 180 && g >= 40 && g <= 155 && b <= 90 && (r - g) > 45) {
               colCount[x]++;
               totalOrange++;
@@ -519,13 +483,8 @@ function detectActiveTab(imageSource) {
           }
         }
 
-        // Không đủ pixel cam → không detect được
-        if (totalOrange < 30) {
-          resolve(null);
-          return;
-        }
+        if (totalOrange < 30) { resolve(null); return; }
 
-        // Tìm cột có mật độ cam cao nhất (sliding window)
         const winSize = 40;
         let maxSum = 0, bestCenter = 0;
         for (let x = 0; x < img.width; x++) {
@@ -538,25 +497,19 @@ function detectActiveTab(imageSource) {
 
         const rel = bestCenter / img.width;
 
-        // Xác định zone chứa rel
         let matched = null;
         for (const z of TAB_ZONES) {
           if (rel >= z.min && rel < z.max) { matched = z; break; }
         }
-        if (!matched) matched = TAB_ZONES[0]; // fallback về trái
+        if (!matched) matched = TAB_ZONES[0];
 
-        // Confidence: khoảng cách giữa tâm gạch cam và tâm zone
         const zoneCenter = (matched.min + matched.max) / 2;
         const distance   = Math.abs(rel - zoneCenter);
         const zoneHalfWidth = (matched.max - matched.min) / 2;
-        // distance = 0 → 100%, distance >= zoneHalfWidth → 60%
         const distanceRatio = Math.min(1, distance / zoneHalfWidth);
         const confidence = Math.round(100 - distanceRatio * 40);
 
-        if (confidence < TAB_MIN_CONFIDENCE) {
-          resolve(null);
-          return;
-        }
+        if (confidence < TAB_MIN_CONFIDENCE) { resolve(null); return; }
 
         resolve({ type: matched.type, confidence });
       } catch (err) {
@@ -570,10 +523,6 @@ function detectActiveTab(imageSource) {
 }
 
 // ==================== PREPROCESS ====================
-
-/**
- * Vẽ ảnh lên canvas ở scale mới
- */
 function _drawToCanvas(img, scale) {
   const s = Math.min(4, Math.max(1, scale));
   const canvas = document.createElement('canvas');
@@ -586,10 +535,6 @@ function _drawToCanvas(img, scale) {
   return { canvas, ctx, width: canvas.width, height: canvas.height };
 }
 
-/**
- * Grayscale toàn bộ canvas
- * @returns {Uint8Array} gray array
- */
 function _toGrayscale(data) {
   const gray = new Uint8Array(data.length / 4);
   for (let i = 0, j = 0; i < data.length; i += 4, j++) {
@@ -600,14 +545,7 @@ function _toGrayscale(data) {
   return gray;
 }
 
-/**
- * Áp dụng contrast stretch: kéo dải sáng tối về 0-255
- * @param {Uint8Array} gray
- * @param {number} lowPct  — percentile thấp (0.02 = 2%)
- * @param {number} highPct — percentile cao (0.98)
- */
 function _applyContrast(gray, lowPct = 0.02, highPct = 0.98) {
-  // Histogram
   const hist = new Array(256).fill(0);
   for (let i = 0; i < gray.length; i++) hist[gray[i]]++;
 
@@ -626,7 +564,7 @@ function _applyContrast(gray, lowPct = 0.02, highPct = 0.98) {
     if (acc >= (total - highTarget)) { highVal = v; break; }
   }
 
-  if (highVal <= lowVal) return gray; // bất thường → giữ nguyên
+  if (highVal <= lowVal) return gray;
 
   const range = highVal - lowVal;
   const out = new Uint8Array(gray.length);
@@ -639,9 +577,6 @@ function _applyContrast(gray, lowPct = 0.02, highPct = 0.98) {
   return out;
 }
 
-/**
- * Otsu threshold (tự tính ngưỡng tối ưu)
- */
 function _otsuThreshold(gray) {
   const hist = new Array(256).fill(0);
   for (let i = 0; i < gray.length; i++) hist[gray[i]]++;
@@ -668,10 +603,6 @@ function _otsuThreshold(gray) {
   return threshold;
 }
 
-/**
- * Binarize gray → đen/trắng với ngưỡng cho trước
- * @returns {Uint8ClampedArray} RGBA array (ready to putImageData)
- */
 function _binarize(gray, threshold) {
   const out = new Uint8ClampedArray(gray.length * 4);
   for (let i = 0, j = 0; i < gray.length; i++, j += 4) {
@@ -684,10 +615,6 @@ function _binarize(gray, threshold) {
   return out;
 }
 
-/**
- * PASS 1 — Grayscale + Contrast, KHÔNG binarize
- * → Giữ được chữ mảnh, dấu tiếng Việt, số nhỏ
- */
 async function preprocessPass1(rawDataUrl, signal) {
   _checkAborted(signal);
   const img = await loadImage(rawDataUrl);
@@ -697,7 +624,6 @@ async function preprocessPass1(rawDataUrl, signal) {
   const gray    = _toGrayscale(imgData.data);
   const contrast = _applyContrast(gray, 0.02, 0.98);
 
-  // Ghi ngược lại vào canvas (grayscale + contrast)
   const out = new Uint8ClampedArray(contrast.length * 4);
   for (let i = 0, j = 0; i < contrast.length; i++, j += 4) {
     out[j]   = contrast[i];
@@ -710,9 +636,6 @@ async function preprocessPass1(rawDataUrl, signal) {
   return canvas.toDataURL('image/png');
 }
 
-/**
- * PASS 2 — Grayscale + Contrast + Otsu
- */
 async function preprocessPass2(rawDataUrl, signal) {
   _checkAborted(signal);
   const img = await loadImage(rawDataUrl);
@@ -728,9 +651,6 @@ async function preprocessPass2(rawDataUrl, signal) {
   return canvas.toDataURL('image/png');
 }
 
-/**
- * PASS 3 — Grayscale + Contrast + Threshold cố định
- */
 async function preprocessPass3(rawDataUrl, fixedThreshold, signal) {
   _checkAborted(signal);
   const img = await loadImage(rawDataUrl);
@@ -748,37 +668,39 @@ async function preprocessPass3(rawDataUrl, fixedThreshold, signal) {
 // ==================== PARSE ====================
 
 /**
- * Chuẩn hóa text OCR — fix các lỗi phổ biến
+ * v2.1: Bắt 12+ biến thể "Đơn hàng" từ log thực tế
  */
 function normalizeOcrText(text) {
   return text
-    // Dash variants → dấu gạch ngang
     .replace(/[–—−]/g, '-')
-    // Comma thập phân → dấu chấm (OCR thường đọc lộn)
     .replace(/(\d),(\d)/g, '$1.$2')
-    // | → 1 (chữ I hoa, pipe)
-    .replace(/[|¡]/g, '1')
-    // O hoa trong số → 0
+    .replace(/¡/g, '1')
     .replace(/\bO(\d)/g, '0$1')
-    // Số + O ở giữa → số + 0
     .replace(/(\d)O\b/g, '$10')
-    // Nhiều khoảng trắng → 1
+
+    // ===== FIX: Bắt 12 biến thể "Đơn hàng" =====
+    .replace(/[đĐ][ơơọo]n\s*h[àa]ng?/gi, 'Đơn hàng')
+    .replace(/[đĐ][ơơọo]nh\b/gi, 'Đơn hàng')
+    .replace(/[đĐ]nh\b/gi, 'Đơn hàng')
+    .replace(/[đĐ]n\s*h[àa]ng/gi, 'Đơn hàng')
+    .replace(/[đĐ]n\s*h\b/gi, 'Đơn hàng')
+    .replace(/\bDon\s*hang?/gi, 'Đơn hàng')
+    .replace(/\bDon\s*h\b/gi, 'Đơn hàng')
+    .replace(/\bHH\s+X\b/gi, 'Đơn hàng')
+    .replace(/\bHH\s+I\b/gi, 'Đơn hàng')
+    .replace(/\bnhang\b/gi, 'Đơn hàng')
+    .replace(/\bơn\s+hàng\b/gi, 'Đơn hàng')
+
     .replace(/[ \t]+/g, ' ')
-    // Xóa dòng chứa giờ (VD: "22:15")
     .split('\n')
     .filter(line => !/\b\d{1,2}:\d{2}\b/.test(line))
     .join('\n');
 }
 
-/**
- * Trích xuất "Tổng N đơn hàng"
- * @returns {number|null}
- */
 function extractTotal(text) {
-  // Pattern linh hoạt: "Tổng 53 đơn hàng" / "Tổng: 53 đơn hàng" / "Tong 53 don hang"
   const patterns = [
-    /Tổng\s*[:\-]?\s*(\d{1,6})\s*đơn\s*hàng/i,
-    /Tong\s*[:\-]?\s*(\d{1,6})\s*don\s*hang/i,
+    /Tổng\s*[:\-]?\s*(\d{1,6})\s*Đơn\s*hàng/i,
+    /Tong\s*[:\-]?\s*(\d{1,6})\s*Don\s*hang/i,
     /Tổng\s*[:\-]?\s*(\d{1,6})/i
   ];
   for (const p of patterns) {
@@ -791,14 +713,9 @@ function extractTotal(text) {
   return null;
 }
 
-/**
- * Trích xuất ngày từ tiêu đề "Chi tiết đơn theo ngày - 04/10"
- * @returns {string} ISO date "2026-10-04"
- */
 function extractDate(text) {
   const clean = text.replace(/,/g, '.');
 
-  // Ưu tiên 1: Full date với 4 chữ số năm
   const fullMatch = clean.match(/(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4}|\d{2})/);
   if (fullMatch) {
     const day = parseInt(fullMatch[1], 10);
@@ -811,7 +728,6 @@ function extractDate(text) {
     }
   }
 
-  // Ưu tiên 2: "ngày 04/10"
   const dayMatch = clean.match(/(?:ngày|ngay)\s*[-–:]?\s*(\d{1,2})[\/\-\.](\d{1,2})/i);
   if (dayMatch) {
     const day = parseInt(dayMatch[1], 10);
@@ -822,7 +738,6 @@ function extractDate(text) {
     }
   }
 
-  // Ưu tiên 3: Bất kỳ cặp dd/mm nào
   const allMatches = [...clean.matchAll(/(\d{1,2})[\/\-\.](\d{1,2})/g)];
   for (const m of allMatches) {
     const day = parseInt(m[1], 10);
@@ -836,11 +751,6 @@ function extractDate(text) {
   return getTodayIso();
 }
 
-/**
- * Map (min, max) → key dải
- * Chấp nhận format: 0.000 - 2.001, 15.001 - 999999.000
- * @returns {string|null}
- */
 function mapRangeToKey(minStr, maxStr) {
   const min = parseFloat(minStr);
   const max = parseFloat(maxStr);
@@ -848,30 +758,21 @@ function mapRangeToKey(minStr, maxStr) {
 
   const minInt = Math.floor(min);
 
-  // Match chính xác theo min int
   if (RANGE_KEY_BY_MIN[minInt] !== undefined) {
     return RANGE_KEY_BY_MIN[minInt];
   }
 
-  // Fallback: min ≥ 15 → over_15
   if (min >= 15) return 'over_15';
 
   return null;
 }
 
 /**
- * PARSE BLOCK-BASED
+ * v2.1: LINE-BASED parser — tìm "N Đơn hàng" trong ±3 dòng quanh range
  * 
- * Cách hoạt động:
- *   1. Tìm tất cả range pattern "X.XXX - Y.YYY" theo thứ tự xuất hiện
- *   2. Với mỗi range, tìm "N Đơn hàng" trong ~150 ký tự ngay sau
- *   3. Fill 0 cho dải không xuất hiện
- * 
- * @returns {{
- *   weights: object,
- *   detectedRanges: number,
- *   parseMode: string
- * }}
+ * Fix vấn đề: OCR đọc "141 Đơnh" ở DÒNG TRÊN range
+ * → parser cũ tìm 1 chiều phía sau → miss
+ * → parser mới tìm 2 chiều cả trước + sau range
  */
 function parseBlockBased(text) {
   const weights = {
@@ -879,17 +780,28 @@ function parseBlockBased(text) {
     '8_10': 0, '10_12': 0, '12_15': 0, 'over_15': 0
   };
 
-  // Bước 1: Tìm tất cả range "0.000 - 2.001" v.v.
-  // Regex: số thập phân 1-6 chữ số + dấu chấm + 3 chữ số | dash | số tương tự
+  // Tách lines + giữ offset tuyệt đối
+  const lines = text.split('\n');
+  const lineOffsets = [];
+  let offset = 0;
+  lines.forEach(line => {
+    lineOffsets.push({ start: offset, end: offset + line.length });
+    offset += line.length + 1;
+  });
+
+  // 1. Tìm tất cả range + biết line nào
   const rangeRegex = /(\d{1,6}\.\d{3})\s*-\s*(\d{1,6}\.\d{3})/g;
   const ranges = [];
   let m;
   while ((m = rangeRegex.exec(text)) !== null) {
+    const pos = m.index;
+    const lineIdx = lineOffsets.findIndex(o => pos >= o.start && pos < o.end);
     ranges.push({
       minStr: m[1],
       maxStr: m[2],
       pos:    m.index,
-      endPos: m.index + m[0].length
+      endPos: m.index + m[0].length,
+      lineIdx
     });
   }
 
@@ -897,69 +809,73 @@ function parseBlockBased(text) {
     return { weights, detectedRanges: 0, parseMode: 'block-empty' };
   }
 
-  // Bước 2: Với mỗi range → tìm "N Đơn hàng" trong 200 ký tự ngay sau
+  // 2. Đánh dấu vị trí "Tổng N Đơn hàng" để loại trừ
+  const totalRegex = /Tổng\s*[:\-]?\s*\d{1,6}\s*Đơn\s*hàng/gi;
+  const totalMatches = [...text.matchAll(totalRegex)];
+  const isInsideTotal = (pos) =>
+    totalMatches.some(t => pos >= t.index && pos < t.index + t[0].length);
+
+  // 3. Với mỗi range → tìm "N Đơn hàng" trong ±3 dòng
   const orderRegex = /(\d{1,6})\s*Đơn\s*hàng/i;
-  const fallbackOrderRegex = /(\d{1,6})\s*Don\s*hang/i;
+  const LINE_WINDOW = 3;
 
   ranges.forEach(r => {
     const key = mapRangeToKey(r.minStr, r.maxStr);
     if (!key) return;
+    if (r.lineIdx === -1) return;
 
-    // Cửa sổ tìm: từ sau range đến 250 ký tự
-    const searchStart = r.endPos;
-    const searchEnd   = Math.min(text.length, r.endPos + 250);
-    const window      = text.slice(searchStart, searchEnd);
+    const searchStart = Math.max(0, r.lineIdx - LINE_WINDOW);
+    const searchEnd   = Math.min(lines.length - 1, r.lineIdx + LINE_WINDOW);
 
-    // Tìm "N Đơn hàng" đầu tiên trong cửa sổ
-    let orderMatch = window.match(orderRegex);
-    if (!orderMatch) orderMatch = window.match(fallbackOrderRegex);
+    let best = null, bestDist = Infinity;
 
-    // Fallback: số đầu tiên trong cửa sổ (chỉ khi không match pattern)
-    let orders = 0;
-    if (orderMatch) {
-      orders = parseInt(orderMatch[1], 10) || 0;
-    } else {
-      // Tìm số đầu tiên 1-4 chữ số (tránh số quá lớn)
-      const numMatch = window.match(/\b(\d{1,4})\b/);
-      if (numMatch) orders = parseInt(numMatch[1], 10) || 0;
+    for (let i = searchStart; i <= searchEnd; i++) {
+      const line = lines[i];
+      const lineStart = lineOffsets[i].start;
+
+      const re = new RegExp(orderRegex.source, 'gi');
+      let mm;
+      while ((mm = re.exec(line)) !== null) {
+        const absPos = lineStart + mm.index;
+        if (isInsideTotal(absPos)) continue;
+
+        const val = parseInt(mm[1], 10);
+        if (!Number.isFinite(val) || val < 0) continue;
+
+        const lineDist = Math.abs(i - r.lineIdx);
+        if (lineDist < bestDist) {
+          bestDist = lineDist;
+          best = { value: val };
+        }
+      }
     }
 
-    // Chỉ ghi nếu chưa có (tránh ghi đè nếu 2 range cùng key — bất thường)
-    if (weights[key] === 0) {
-      weights[key] = orders;
+    if (best && weights[key] === 0) {
+      weights[key] = best.value;
     }
   });
 
   return {
     weights,
     detectedRanges: ranges.length,
-    parseMode: 'block'
+    parseMode: 'block-v3-line-based'
   };
 }
 
 // ==================== VALIDATION ====================
-
-/**
- * Validate structure: số dải có data, tổng không âm
- */
 function validateStructure(weights) {
   const values = Object.values(weights);
   const nonZero = values.filter(v => Number(v) > 0).length;
   const total   = values.reduce((a, b) => a + Number(b), 0);
 
   const errors = [];
-  const warnings = [];
 
   if (total === 0) errors.push('Không đọc được đơn nào');
   if (nonZero > 8) errors.push('Quá nhiều dải có dữ liệu (>8)');
 
-  return { ok: errors.length === 0, errors, warnings, nonZero, total };
+  return { ok: errors.length === 0, errors, warnings: [], nonZero, total };
 }
 
-/**
- * Soft distribution warning — không loại, chỉ cảnh báo
- * (Vì có ngày 100% đơn ở dải 0-2 là bình thường)
- */
 function validateDistribution(weights) {
   const w = {
     '0_2':    Number(weights['0_2'])    || 0,
@@ -977,7 +893,6 @@ function validateDistribution(weights) {
   const warnings = [];
   const suspects = new Set();
 
-  // Soft checks — chỉ cảnh báo nếu CỰC ĐOAN
   const maxVal = Math.max(...Object.values(w));
   const maxKey = Object.keys(w).find(k => w[k] === maxVal);
   if (maxKey && maxKey !== '0_2' && w['0_2'] > 0 && maxVal > w['0_2'] * 10) {
@@ -985,24 +900,17 @@ function validateDistribution(weights) {
     suspects.add(maxKey);
   }
 
-  // Dải 2-4 cao hơn 0-2 (rất bất thường)
   if (w['2_4'] > w['0_2'] * 2 && w['0_2'] < 5) {
     warnings.push('Dải 2-4 cao hơn 0-2 gấp 2 lần — có thể lỗi');
     suspects.add('2_4');
   }
 
-  return { ok: warnings.length === 0, warnings, suspectKeys: [...suspectedKeysFix(suspects)] };
+  return { ok: warnings.length === 0, warnings, suspectKeys: [...suspects] };
 }
 
-function suspectedKeysFix(set) {
-  return Array.from(set);
-}
-
-/**
- * Tìm exact duplicate (cùng ngày + cùng type + cùng weights)
- */
 function findExactDuplicate(r) {
   const type = getTypeFromResult(r);
+  if (!type) return null;
   const weights = buildWeights(r);
   return state.appData[type].find(rec =>
     rec.date === r.parsedDate &&
@@ -1012,28 +920,13 @@ function findExactDuplicate(r) {
   ) || null;
 }
 
-/**
- * Tìm record CÙNG NGÀY + CÙNG TYPE (khác weights)
- */
 function findSameDaySameType(r) {
   const type = getTypeFromResult(r);
+  if (!type) return null;
   return state.appData[type].find(rec => rec.date === r.parsedDate) || null;
 }
 
 // ==================== SCORING ====================
-
-/**
- * Tính confidence score 0-100
- * 
- * Công thức:
- *   total        x 0.50  — checksum khớp bao nhiêu
- *   structure    x 0.25  — số dải hợp lệ, số dải có data
- *   ocr          x 0.15  — Tesseract tự đánh giá
- *   distribution x 0.10  — phân bố có hợp lý không (soft)
- * 
- * Nếu checksum fail → cap max = SCORE_MAX_CHECKSUM_FAIL (84)
- * → tự động rớt xuống Manual modal
- */
 function computeScore({
   expectedTotal,
   actualTotal,
@@ -1042,10 +935,9 @@ function computeScore({
   ocrConfidence,
   distributionWarnings
 }) {
-  // ---- 1. Total score ----
   let totalScore;
   if (expectedTotal === null) {
-    totalScore = 70; // không có checksum → trung bình
+    totalScore = 70;
   } else if (expectedTotal === actualTotal) {
     totalScore = 100;
   } else {
@@ -1057,31 +949,25 @@ function computeScore({
     else                      totalScore = 30;
   }
 
-  // ---- 2. Structure score ----
   let structureScore = 100;
   if (detectedRanges === 0)        structureScore = 30;
   else if (detectedRanges > 8)     structureScore = 60;
   else if (nonZeroRanges === 0)    structureScore = 30;
-  else                             structureScore = 100;
 
-  // ---- 3. OCR score ----
   const ocrScore = Number.isFinite(ocrConfidence)
     ? Math.max(0, Math.min(100, ocrConfidence))
     : 85;
 
-  // ---- 4. Distribution score ----
   const distributionScore = distributionWarnings.length === 0
     ? 100
     : Math.max(50, 100 - distributionWarnings.length * 15);
 
-  // ---- Weighted final ----
   let finalScore =
     totalScore        * 0.50 +
     structureScore    * 0.25 +
     ocrScore          * 0.15 +
     distributionScore * 0.10;
 
-  // ---- Cap if checksum fail ----
   const checksumOk = expectedTotal !== null && expectedTotal === actualTotal;
   if (!checksumOk) {
     finalScore = Math.min(finalScore, SCORE_MAX_CHECKSUM_FAIL);
@@ -1097,12 +983,7 @@ function computeScore({
   };
 }
 
-// ==================== HELPERS (dùng chung part 3) ====================
-
-/**
- * Build weights object từ OCR result
- * (dùng format WEIGHT_KEYS của config.js)
- */
+// ==================== HELPERS ====================
 function buildWeights(r) {
   const suffixMap = {
     '0_2':    'w0_2',
@@ -1122,10 +1003,6 @@ function buildWeights(r) {
   return w;
 }
 
-/**
- * Xác định type từ OCR result
- * @returns {'delivery'|'pickup'|'return'|null}
- */
 function getTypeFromResult(r) {
   if (!r.detectedColorType) return null;
   return r.detectedColorType === 'del'  ? 'delivery'
@@ -1133,9 +1010,6 @@ function getTypeFromResult(r) {
        : 'return';
 }
 
-/**
- * Label hiển thị
- */
 function getTypeLabel(r) {
   if (!r.detectedColorType) return 'Không rõ';
   return r.detectedColorType === 'del'  ? 'Giao'
@@ -1143,7 +1017,7 @@ function getTypeLabel(r) {
        : 'Hoàn';
 }
 // =============================================================
-// OCR ENGINE v2 — PART 3/3
+// OCR ENGINE v2.1 — PART 3/3
 // Pipeline · Routing · Modals · Batch · Exports
 // =============================================================
 
@@ -1168,9 +1042,6 @@ async function ensurePushUndo() {
 }
 
 // ==================== PARSE FROM TEXT ====================
-/**
- * Nhận text OCR thô → trả về object đã parse đầy đủ
- */
 function parseFromText(rawText) {
   const normalized = normalizeOcrText(rawText);
   const expectedTotal = extractTotal(normalized);
@@ -1191,9 +1062,6 @@ function parseFromText(rawText) {
 }
 
 // ==================== SCORE RESULT ====================
-/**
- * Tính điểm confidence cho 1 kết quả parse
- */
 function scoreResult(parsed) {
   const structure = validateStructure(parsed.weights);
   const dist      = validateDistribution(parsed.weights);
@@ -1204,7 +1072,7 @@ function scoreResult(parsed) {
     actualTotal:   parsed.actualTotal,
     detectedRanges: parsed.detectedRanges,
     nonZeroRanges:  nonZero,
-    ocrConfidence: 85, // Tesseract v5 không trả confidence per-cell → dùng baseline
+    ocrConfidence: 85,
     distributionWarnings: dist.warnings
   });
 
@@ -1222,63 +1090,44 @@ function buildFinalResult({
   parsed, rawText, detectedColorType, tabConfidence,
   scoreBundle, attempts, blobUrl
 }) {
-  // Confidences cho từng dải = score.final (đơn giản hóa)
   const confidences = {};
   Object.keys(parsed.weights).forEach(k => {
     confidences[k] = scoreBundle.score.final;
   });
 
   return {
-    // Kết quả chính
-    detectedColorType,        // 'del' | 'pick' | 'ret' | null
+    detectedColorType,
     tabConfidence: tabConfidence || 0,
     parsedDate:    parsed.parsedDate,
     weights:       parsed.weights,
     confidences,
 
-    // Checksum
     expectedTotal: parsed.expectedTotal,
     actualTotal:   parsed.actualTotal,
-    totalFound:    parsed.actualTotal, // backward compat
+    totalFound:    parsed.actualTotal,
 
-    // Score breakdown
     score: scoreBundle.score,
 
-    // Cảnh báo mềm
     distWarnings: scoreBundle.dist.warnings,
     suspectKeys:  scoreBundle.suspectKeys,
 
-    // Metadata
     attempts,
     parseMode: parsed.parseMode,
     detectedRanges: parsed.detectedRanges,
 
-    // Raw + preview
     rawText,
     imageBlobUrl: blobUrl || '',
-    fullDataUrl:  blobUrl || '' // backward compat cho modal cũ
+    fullDataUrl:  blobUrl || ''
   };
 }
 
 // ==================== PROCESS ONE FILE ====================
-/**
- * Xử lý 1 file ảnh qua pipeline 3 pass
- * @returns {Promise<{
- *   file: string,
- *   thumbnail: string,
- *   result: object | null,
- *   error: string | null,
- *   fromCache?: boolean
- * }>}
- */
 async function processOneFile(file, signal) {
   _checkAborted(signal);
 
-  // ---- 1. Cache check ----
   const hash = await hashBlob(file);
   const cached = cacheGet(hash);
 
-  // Load ảnh gốc → blobURL (RAM-friendly)
   const blobUrl = URL.createObjectURL(file);
 
   if (cached) {
@@ -1291,23 +1140,19 @@ async function processOneFile(file, signal) {
     };
   }
 
-  // ---- 2. Đọc ảnh gốc ----
   _checkAborted(signal);
   const dataUrl = await readFileAsDataURL(file);
   const thumbnail = await makeThumbnail(dataUrl, 96);
 
-  // ---- 3. Detect tab ----
   _checkAborted(signal);
   const tabInfo = await detectActiveTab(dataUrl);
   const detectedColorType = tabInfo ? tabInfo.type : null;
   const tabConfidence = tabInfo ? tabInfo.confidence : 0;
 
-  // ---- 4. 3 Pass OCR ----
   let bestBundle = null;
   let bestScore  = -1;
   let attempts   = 0;
 
-  // Các pass: [hàm preprocess, tham số]
   const passes = [
     { name: 'P1-contrast',   run: () => preprocessPass1(dataUrl, signal) },
     { name: 'P2-otsu',       run: () => preprocessPass2(dataUrl, signal) },
@@ -1333,14 +1178,12 @@ async function processOneFile(file, signal) {
 
       const bundle = { parsed, rawText: text, scoreBundle, passName: pass.name };
 
-      // Nếu pass này ≥ threshold auto-save → dừng ngay
       if (scoreBundle.score.final >= SCORE_AUTO_SAVE) {
         bestBundle = bundle;
         bestScore  = scoreBundle.score.final;
         break;
       }
 
-      // Lưu best
       if (scoreBundle.score.final > bestScore) {
         bestScore  = scoreBundle.score.final;
         bestBundle = bundle;
@@ -1348,11 +1191,9 @@ async function processOneFile(file, signal) {
     } catch (err) {
       if (err.message === 'OCR_CANCELLED') throw err;
       console.warn(`[OCR] Pass ${pass.name} lỗi:`, err.message);
-      // Tiếp tục pass sau
     }
   }
 
-  // Không pass nào chạy được
   if (!bestBundle) {
     return {
       file: file.name,
@@ -1362,7 +1203,6 @@ async function processOneFile(file, signal) {
     };
   }
 
-  // ---- 5. Build final result ----
   const result = buildFinalResult({
     parsed:          bestBundle.parsed,
     rawText:         bestBundle.rawText,
@@ -1373,7 +1213,6 @@ async function processOneFile(file, signal) {
     blobUrl
   });
 
-  // ---- 6. Cache (KHÔNG cache blobUrl) ----
   cacheSet(hash, {
     thumbnail,
     result: { ...result, imageBlobUrl: '', fullDataUrl: '' }
@@ -1409,10 +1248,6 @@ async function tryAutoSave(r) {
   return true;
 }
 
-/**
- * Force save — dùng khi user bấm "Lưu luôn" trong review modal
- * (bỏ qua ngưỡng score, nhưng vẫn cần có detectedColorType)
- */
 async function tryAutoSaveForce(r) {
   if (!r.detectedColorType) return false;
   const type = getTypeFromResult(r);
@@ -1436,7 +1271,7 @@ async function tryAutoSaveForce(r) {
   return true;
 }
 
-// ==================== TAB PICKER MODAL (dynamic) ====================
+// ==================== TAB PICKER MODAL ====================
 function showTabPickerModal() {
   return new Promise(resolve => {
     const style = document.createElement('style');
@@ -1502,7 +1337,7 @@ function showTabPickerModal() {
   });
 }
 
-// ==================== REVIEW MODAL (dynamic) ====================
+// ==================== REVIEW MODAL ====================
 function showReviewModal(item) {
   return new Promise(resolve => {
     const r = item.result;
@@ -1603,7 +1438,7 @@ function showReviewModal(item) {
   });
 }
 
-// ==================== CANCEL BUTTON (inject vào overlay) ====================
+// ==================== CANCEL BUTTON ====================
 function ensureCancelButton() {
   const overlay = document.getElementById('ocrLoadingOverlay');
   if (!overlay) return;
@@ -1654,9 +1489,6 @@ function showSummaryToast(saved, dup, need, delayMs = 0) {
 }
 
 // ==================== PIPELINE CHUNG ====================
-/**
- * Chạy OCR cho mảng File, route kết quả theo score
- */
 async function _runOcrFromFiles(files, wasAppend = false) {
   if (!files || files.length === 0) return;
 
@@ -1684,36 +1516,31 @@ async function _runOcrFromFiles(files, wasAppend = false) {
 
     if (overlay) overlay.style.display = 'none';
 
-    // ===== ROUTING =====
     const autoSaved     = [];
-    const duplicates    = [];  // { item, type: 'exact'|'same_day', existing? }
-    const needAttention = [];  // cần user xác nhận (score <92)
-    const needTab       = [];  // không detect được tab
+    const duplicates    = [];
+    const needAttention = [];
+    const needTab       = [];
 
     for (const item of results) {
       if (item.error) { needAttention.push(item); continue; }
       const r = item.result;
 
-      // 1. Chưa detect được tab → cần user chọn
       if (!r.detectedColorType) {
         needTab.push(item);
         continue;
       }
 
-      // 2. Exact duplicate (cùng ngày + cùng type + cùng weights) → skip
       if (findExactDuplicate(r)) {
         duplicates.push({ item, kind: 'exact' });
         continue;
       }
 
-      // 3. Cùng ngày + cùng type khác weights → cho compare
       const sameDay = findSameDaySameType(r);
       if (sameDay) {
         duplicates.push({ item, kind: 'same_day', existing: sameDay });
         continue;
       }
 
-      // 4. Score ≥92 → auto-save
       if (r.score.final >= SCORE_AUTO_SAVE) {
         if (await tryAutoSave(r)) {
           autoSaved.push(item);
@@ -1725,16 +1552,14 @@ async function _runOcrFromFiles(files, wasAppend = false) {
       }
     }
 
-    // ===== Xử lý needTab trước =====
     for (const item of needTab) {
       _checkAborted(signal);
       const type = await showTabPickerModal();
-      if (type === null) continue; // user bỏ
+      if (type === null) continue;
 
       item.result.detectedColorType = type;
-      item.result.tabConfidence = 100; // user chọn → confidence cao
+      item.result.tabConfidence = 100;
 
-      // Re-route
       if (findExactDuplicate(item.result)) {
         duplicates.push({ item, kind: 'exact' });
         continue;
@@ -1753,9 +1578,7 @@ async function _runOcrFromFiles(files, wasAppend = false) {
       }
     }
 
-    // ===== Xử lý needAttention =====
     if (needAttention.length > 0) {
-      // Append mode (đang quét thêm vào batch)
       if (wasAppend) {
         batchResults.push(...needAttention);
         renderBatchList();
@@ -1764,7 +1587,6 @@ async function _runOcrFromFiles(files, wasAppend = false) {
         return;
       }
 
-      // Single file → route vào review/manual
       if (files.length === 1) {
         const item = needAttention[0];
         if (item.error) {
@@ -1780,18 +1602,15 @@ async function _runOcrFromFiles(files, wasAppend = false) {
         return;
       }
 
-      // Nhiều file → mở batch modal
       batchResults = needAttention;
       openBatchOcrModal();
       showSummaryToast(autoSaved.length, duplicates.length, needAttention.length, 400);
       return;
     }
 
-    // ===== Không có ảnh cần check =====
     if (files.length === 1) {
       const item = results[0];
 
-      // Exact duplicate → thông báo
       if (duplicates.length === 1 && duplicates[0].kind === 'exact') {
         const r = item.result;
         showToast(
@@ -1801,7 +1620,6 @@ async function _runOcrFromFiles(files, wasAppend = false) {
         return;
       }
 
-      // Same day khác weights → compare modal
       if (duplicates.length === 1 && duplicates[0].kind === 'same_day') {
         await openCompareModal(duplicates[0].item, duplicates[0].existing);
         return;
@@ -1839,7 +1657,7 @@ export async function handleOcrImage(event) {
   await _runOcrFromFiles(files, wasAppend);
 }
 
-// ==================== ENTRY: SHARE TARGET (SPX-F) ====================
+// ==================== ENTRY: SHARE TARGET ====================
 export async function handleSharedImage(sharedFiles) {
   const arr = Array.from(sharedFiles || []);
   if (arr.length === 0) {
@@ -1871,7 +1689,6 @@ export function fillModalFromResult(item) {
   state.lastOcrImageDataUrl = r.imageBlobUrl || r.fullDataUrl || '';
   state.isOcrScan = true;
 
-  // Debug log
   const debugEl = document.getElementById('ocrDebugText');
   if (debugEl) {
     const scoreStr = `[Score ${r.score.final} — Total ${r.score.total} / Structure ${r.score.structure} / OCR ${r.score.ocr} / Dist ${r.score.distribution}]`;
@@ -1909,7 +1726,6 @@ export function fillModalFromResult(item) {
   if (r.score.final < SCORE_REVIEW) toastType = 'error';
   else if (r.score.final < SCORE_AUTO_SAVE) toastType = 'warning';
 
-  // Cảnh báo phân bố
   if (r.distWarnings && r.distWarnings.length > 0) {
     showDistributionWarning(
       { warnings: r.distWarnings, suspectKeys: r.suspectKeys || [] },
@@ -2122,7 +1938,6 @@ export async function importBatchItem(idx) {
 
   closeBatchOcrModal();
 
-  // Chưa có type → tab picker
   if (!r.detectedColorType) {
     const type = await showTabPickerModal();
     if (type === null) {
@@ -2184,23 +1999,19 @@ export async function saveBatchAll() {
 
   const finalList = [];
   let dupExisting = 0;
-  let suspectSkipped = 0;
 
   dedupedBatch.forEach(item => {
     const r = item.result;
     const type = getTypeFromResult(r);
     if (!type) { dupInBatch++; return; }
 
-    // Exact duplicate → skip
     if (findExactDuplicate(r)) { dupExisting++; return; }
-
-    // Same day khác weights → skip (đã có data ngày đó, để user compare riêng)
     if (findSameDaySameType(r)) { dupExisting++; return; }
 
     finalList.push({ item, type, weights: buildWeights(r) });
   });
 
-  const totalSkipped = dupInBatch + dupExisting + suspectSkipped;
+  const totalSkipped = dupInBatch + dupExisting;
 
   if (finalList.length === 0) {
     let msg = 'Không có gì để lưu';
