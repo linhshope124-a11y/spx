@@ -132,10 +132,8 @@ function recordHasPoint(r, type) {
  * Áp dụng filter nâng cao cho 1 record
  */
 function recordPassesFilters(r, type) {
-  // 1) Type filter
   if (!_histFilters.types[type]) return false;
 
-  // 2) Date filter (nếu có → không áp dụng period; nếu không → dùng period)
   const hasDateFilter = _histFilters.dateFrom || _histFilters.dateTo;
   if (!hasDateFilter) {
     if (!isDateInCurrentPeriod(r.date, state.periodMode, state.currentMonth, state.currentDate)) {
@@ -146,14 +144,12 @@ function recordPassesFilters(r, type) {
     if (_histFilters.dateTo   && r.date > _histFilters.dateTo)   return false;
   }
 
-  // 3) Orders range filter
   const dayTotal = WEIGHT_KEYS.reduce(
     (s, k) => s + (parseInt(r.weights[k], 10) || 0), 0
   );
   if (_histFilters.minOrders != null && dayTotal < _histFilters.minOrders) return false;
   if (_histFilters.maxOrders != null && dayTotal > _histFilters.maxOrders) return false;
 
-  // 4) Score filter
   if (_histFilters.scoreFilter !== 'all') {
     const has = recordHasPoint(r, type);
     if (_histFilters.scoreFilter === 'met'    && !has) return false;
@@ -399,17 +395,23 @@ function renderRow(weightLabel, orders, tier, typeClass) {
     <td class="next-cell gain-cell">${gainText}</td>`;
 }
 
+/**
+ * v50.11.6: Trả về object { type, need, gain, html } để sort + filter.
+ * Trả null nếu dải không có cơ hội tăng điểm.
+ */
 function buildOverviewSuggestion(type, label, orders, tier) {
   if (orders <= 0 || !tier.next || !isFinite(tier.matched.maxA)) return null;
   const need  = tier.matched.maxA - orders;
+  const gain  = tier.next.pt - tier.matched.pt;
   const badge = type === 'del' ? 'G' : type === 'pick' ? 'L' : 'H';
   const cls   = type === 'del' ? 'sugg-del'  : type === 'pick' ? 'sugg-pick'  : 'sugg-ret';
   const bcls  = type === 'del' ? 'sugg-type-del' : type === 'pick' ? 'sugg-type-pick' : 'sugg-type-ret';
-  return `<div class="suggestion-item ${cls}">
+  const html = `<div class="suggestion-item ${cls}">
     <div class="sugg-left"><h4><span class="sugg-type-badge ${bcls}">${badge}</span> ${label} · ${_fmt(orders)} đơn</h4>
     <p>Thêm <b style="${NEED_HIGHLIGHT}">+${_fmt(need)}</b> đơn đạt ${tier.next.range}</p></div>
-    <div class="sugg-points">+${formatPts(tier.next.pt - tier.matched.pt)}</div>
+    <div class="sugg-points">+${formatPts(gain)}</div>
   </div>`;
+  return { type, need, gain, html };
 }
 
 // ==================== UPDATE ALL VIEWS ====================
@@ -451,7 +453,25 @@ function _updateAllViews() {
     const emptyMsg = 'Chưa có dữ liệu kỳ này. Bấm menu → Nhập sản lượng để bắt đầu.';
     ovBox.innerHTML = `<div style="font-size:11.5px;color:var(--text-3);text-align:center;padding:16px">${emptyMsg}</div>`;
   } else {
-    ovBox.innerHTML = ovSuggBuf.join('');
+    // v50.11.6: Sort need tăng dần, tie-break gain giảm dần
+    ovSuggBuf.sort((a, b) => {
+      if (a.need !== b.need) return a.need - b.need;
+      if (a.gain !== b.gain) return b.gain - a.gain;
+      return 0;
+    });
+
+    // v50.11.6: Chỉ hiện loại đang chọn (mặc định 'del')
+    const ovFilter = (state.overviewFilter === 'pick' || state.overviewFilter === 'ret')
+      ? state.overviewFilter
+      : 'del';
+    const filtered = ovSuggBuf.filter(o => o.type === ovFilter);
+
+    if (filtered.length === 0) {
+      const label = ovFilter === 'del' ? 'Giao' : ovFilter === 'pick' ? 'Lấy' : 'Hoàn';
+      ovBox.innerHTML = `<div style="font-size:11.5px;color:var(--text-3);text-align:center;padding:16px">Không có cơ hội tăng điểm cho loại ${label}</div>`;
+    } else {
+      ovBox.innerHTML = filtered.map(o => o.html).join('');
+    }
   }
 
   const rawBase = delPts + pickPts + retPts;
@@ -671,7 +691,6 @@ function updateHistFilterSummaryUI() {
 
   const chips = [];
 
-  // 📅 Date range
   if (_histFilters.dateFrom || _histFilters.dateTo) {
     if (_histFilters.dateFrom && _histFilters.dateTo) {
       chips.push(`📅 ${formatDateDisplay(_histFilters.dateFrom)} → ${formatDateDisplay(_histFilters.dateTo)}`);
@@ -682,7 +701,6 @@ function updateHistFilterSummaryUI() {
     }
   }
 
-  // 📦 Types
   const t = _histFilters.types;
   const activeTypes = [];
   if (t.delivery) activeTypes.push('Giao');
@@ -692,7 +710,6 @@ function updateHistFilterSummaryUI() {
     chips.push(`📦 ${activeTypes.length === 0 ? 'Không loại nào' : activeTypes.join(' + ')}`);
   }
 
-  // 🔢 Orders
   if (_histFilters.minOrders != null || _histFilters.maxOrders != null) {
     if (_histFilters.minOrders != null && _histFilters.maxOrders != null) {
       chips.push(`🔢 ${_fmt(_histFilters.minOrders)} - ${_fmt(_histFilters.maxOrders)} đơn`);
@@ -703,7 +720,6 @@ function updateHistFilterSummaryUI() {
     }
   }
 
-  // 🎯 Score
   if (_histFilters.scoreFilter !== 'all') {
     chips.push(`🎯 ${_histFilters.scoreFilter === 'met' ? 'Đạt mốc' : 'Chưa mốc'}`);
   }
@@ -722,16 +738,13 @@ export function renderHistory() {
   const prevScroll = container.scrollTop;
   container.innerHTML = '';
 
-  // v50.11.0: chip Lọc active state
   const chip = document.getElementById('histFilterChip');
   if (chip) {
     chip.classList.toggle('active', hasActiveHistFilters());
   }
 
-  // v50.11.0: chip summary
   updateHistFilterSummaryUI();
 
-  // Gom list theo filter nâng cao
   let list = [];
   ['delivery', 'pickup', 'return'].forEach(type => {
     if (!_histFilters.types[type]) return;
