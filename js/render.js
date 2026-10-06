@@ -22,9 +22,6 @@ let _histFilters = {
   types: { ...DEFAULT_HIST_FILTERS.types }
 };
 
-/**
- * Trả về bản copy filter hiện tại (không expose reference)
- */
 export function getHistFilters() {
   return {
     ..._histFilters,
@@ -32,9 +29,6 @@ export function getHistFilters() {
   };
 }
 
-/**
- * Merge partial filter — không overwrite toàn bộ object
- */
 export function setHistFilters(partial) {
   if (!partial || typeof partial !== 'object') return;
 
@@ -96,7 +90,6 @@ export function countActiveHistFilters() {
   return n;
 }
 
-// Backward compat (v50.9.0 API cũ)
 export function getHistDateFilter() {
   if (_histFilters.dateFrom && _histFilters.dateFrom === _histFilters.dateTo) {
     return _histFilters.dateFrom;
@@ -113,9 +106,6 @@ export function setHistDateFilter(v) {
   }
 }
 
-/**
- * Kiểm tra record có điểm > 0 không (đạt mốc đầu tiên ở bất kỳ dải nào)
- */
 function recordHasPoint(r, type) {
   const tableData = type === 'delivery' ? TABLE_5_DATA
                   : type === 'pickup'   ? TABLE_4_DATA
@@ -128,9 +118,6 @@ function recordHasPoint(r, type) {
   return false;
 }
 
-/**
- * Áp dụng filter nâng cao cho 1 record
- */
 function recordPassesFilters(r, type) {
   if (!_histFilters.types[type]) return false;
 
@@ -310,17 +297,11 @@ function updateHeroContextLabel() {
 // ==================== v50.11.0: TÀI XẾ CONDITION BANNER ====================
 const TAIXE_ORDER_THRESHOLD = 1500;
 
-/**
- * Render banner điều kiện cộng Tài xế dưới input Tài xế
- * @param {number} delOrders - Tổng đơn Giao của THÁNG đang xem
- * @param {number} taiXeAmount - Số tiền Tài xế đã nhập (VNĐ)
- */
 function renderTaiXeConditionBanner(delOrders, taiXeAmount) {
   const banner = document.getElementById('taixeConditionBanner');
   if (!banner) return;
 
   const amt = Number(taiXeAmount) || 0;
-  // Rule: Input Tài xế = 0 → không hiện banner
   if (amt === 0) {
     banner.style.display = 'none';
     return;
@@ -395,10 +376,6 @@ function renderRow(weightLabel, orders, tier, typeClass) {
     <td class="next-cell gain-cell">${gainText}</td>`;
 }
 
-/**
- * v50.11.6: Trả về object { type, need, gain, html } để sort + filter.
- * Trả null nếu dải không có cơ hội tăng điểm.
- */
 function buildOverviewSuggestion(type, label, orders, tier) {
   if (orders <= 0 || !tier.next || !isFinite(tier.matched.maxA)) return null;
   const need  = tier.matched.maxA - orders;
@@ -488,7 +465,6 @@ function _updateAllViews() {
   const manualBuuCuc = salaryCfg.buuCuc;
   const manualTaiXe  = salaryCfg.taiXe;
 
-  // ===== v50.11.0: BUSINESS RULE — Tài xế CHỈ cộng khi đơn Giao ≥ 1500/tháng =====
   const delOrders = total.del;
   let monthlyTotal = salaryBase + manualBuuCuc;
   if (delOrders >= TAIXE_ORDER_THRESHOLD) {
@@ -552,44 +528,7 @@ function _updateAllViews() {
     `${_fmt(retPts)} <span class="hero-value-unit">Điểm</span>`;
   document.getElementById('retTotalOrders').innerText = `${_fmt(total.ret)} đơn`;
 
-  // ===== RATIO BAR =====
-  const ratioContentEl = document.getElementById('ratioContent');
-  const ratioEmptyEl   = document.getElementById('ratioEmpty');
-  const pctDelEl  = document.getElementById('ratioPctDel');
-  const pctPickEl = document.getElementById('ratioPctPick');
-  const pctRetEl  = document.getElementById('ratioPctRet');
-
-  if (totalOrders > 0) {
-    if (ratioContentEl) ratioContentEl.style.display = 'block';
-    if (ratioEmptyEl)   ratioEmptyEl.style.display   = 'none';
-
-    const rawDel  = (total.del  / totalOrders) * 100;
-    const rawPick = (total.pick / totalOrders) * 100;
-    const rawRet  = (total.ret  / totalOrders) * 100;
-    let pDel  = Math.floor(rawDel);
-    let pPick = Math.floor(rawPick);
-    let pRet  = Math.floor(rawRet);
-    const remainder = 100 - (pDel + pPick + pRet);
-    const fracs = [
-      { k: 'del',  f: rawDel  - pDel  },
-      { k: 'pick', f: rawPick - pPick },
-      { k: 'ret',  f: rawRet  - pRet  }
-    ].sort((a, b) => b.f - a.f);
-    for (let i = 0; i < remainder; i++) {
-      if (fracs[i % 3].k === 'del') pDel++;
-      else if (fracs[i % 3].k === 'pick') pPick++;
-      else pRet++;
-    }
-    document.getElementById('ratioBarDel').style.width  = pDel  + '%';
-    document.getElementById('ratioBarPick').style.width = pPick + '%';
-    document.getElementById('ratioBarRet').style.width  = pRet  + '%';
-    if (pctDelEl)  pctDelEl.innerText  = pDel  + '%';
-    if (pctPickEl) pctPickEl.innerText = pPick + '%';
-    if (pctRetEl)  pctRetEl.innerText  = pRet  + '%';
-  } else {
-    if (ratioContentEl) ratioContentEl.style.display = 'none';
-    if (ratioEmptyEl)   ratioEmptyEl.style.display   = 'block';
-  }
+  // ===== v50.11.7: Đã bỏ block render RATIO BAR (không dùng nữa) =====
 
   // ===== Income UI =====
   const salaryBaseEl   = document.getElementById('salaryBaseInput');
@@ -632,10 +571,8 @@ function _updateAllViews() {
     progressFill.style.width = pct + '%';
   }
 
-  // ===== v50.11.0: Banner Tài xế =====
   renderTaiXeConditionBanner(delOrders, manualTaiXe);
 
-  // ===== Count bản ghi =====
   const filteredCount =
     state.appData.delivery.filter(r => isDateInCurrentPeriod(r.date, state.periodMode, state.currentMonth, state.currentDate)).length +
     state.appData.pickup.filter(r => isDateInCurrentPeriod(r.date, state.periodMode, state.currentMonth, state.currentDate)).length +
@@ -668,7 +605,7 @@ export function updateAllViews() {
   _updateAllViews_debounced();
 }
 
-// ==================== v50.11.0: UPDATE CHIP SUMMARY (SPX-H) ====================
+// ==================== UPDATE CHIP SUMMARY (SPX-H) ====================
 function updateHistFilterSummaryUI() {
   const summary = document.getElementById('histFilterSummary');
   const chipsBox = document.getElementById('histFilterSummaryChips');
