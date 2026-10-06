@@ -1,7 +1,7 @@
 import { showAlert } from './dialog.js';
 
 const undoStack = [];
-const MAX_UNDO = 5;
+const MAX_UNDO = 10;
 let undoTimer = null;
 
 export function pushUndo({ msg, restore }) {
