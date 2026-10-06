@@ -1,4 +1,4 @@
-import { STORAGE_KEYS } from './config.js';
+import { STORAGE_KEYS, WEIGHT_KEYS } from './config.js';
 import { generateId, getCurrentMonthIso, getTodayIso } from './utils.js';
 
 export const state = {
@@ -79,19 +79,37 @@ function safeParseString(key, fallback = '') {
 }
 // ============ /SAFE PARSE ============
 
+// ============ v50.11.5: SANITIZE WEIGHTS ============
+/**
+ * Chuẩn hóa object weights — đảm bảo có đủ 8 key, đều là số nguyên ≥ 0.
+ * Tránh crash khi import file backup cũ thiếu key / sai type.
+ *
+ * @param {*} w - object weights thô từ bất kỳ nguồn nào
+ * @returns {Object} object weights có đủ 8 key hợp lệ
+ */
+function sanitizeWeights(w) {
+  const out = {};
+  const safe = (w && typeof w === 'object') ? w : {};
+  WEIGHT_KEYS.forEach(k => {
+    const v = parseInt(safe[k], 10);
+    out[k] = (Number.isFinite(v) && v > 0) ? v : 0;
+  });
+  return out;
+}
+// ============ /SANITIZE WEIGHTS ============
+
 function sanitizeRecords(arr) {
   if (!Array.isArray(arr)) return [];
   return arr
     .filter(r =>
       r && typeof r === 'object' &&
       typeof r.date === 'string' &&
-      /^\d{4}-\d{2}-\d{2}$/.test(r.date) &&
-      r.weights && typeof r.weights === 'object'
+      /^\d{4}-\d{2}-\d{2}$/.test(r.date)
     )
     .map(r => ({
       id: Number.isFinite(r.id) ? r.id : generateId(),
       date: r.date,
-      weights: r.weights
+      weights: sanitizeWeights(r.weights)
     }));
 }
 
@@ -245,7 +263,7 @@ export function loadState() {
     d = { delivery: [], pickup: [], return: [] };
   }
 
-  // Sanitize từng loại
+  // Sanitize từng loại (v50.11.5: sanitize cả weights)
   state.appData = {
     delivery: sanitizeRecords(d.delivery),
     pickup:   sanitizeRecords(d.pickup),
