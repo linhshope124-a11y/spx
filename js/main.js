@@ -23,7 +23,9 @@ import {
   quickPickDateRange, quickPickOrders,
   toggleFilterType, pickFilterScore,
   resetHistoryFilterPanel, applyHistoryFilterPanel,
-  clearAllHistoryFilters
+  clearAllHistoryFilters,
+  // v50.11.8: all opportunities modal
+  openAllOpportunitiesModal, closeAllOpportunitiesModal
 } from './ui.js';
 import {
   handleOcrImage, preloadTesseractWorker,
@@ -40,7 +42,11 @@ import {
   copyDataJson, openPasteJsonModal, closePasteJsonModal,
   confirmImportJsonString, exportData, importData, restoreFromVault
 } from './backup.js';
-import { updateAllViews, renderReminderBanner, dismissReminderBanner } from './render.js';
+import {
+  updateAllViews, renderReminderBanner, dismissReminderBanner,
+  // v50.11.8
+  setAllOppFilter
+} from './render.js';
 import {
   testCloudConnection, pushToCloud, pullFromCloud,
   initCloudUI, clearCloudToken
@@ -154,21 +160,17 @@ async function _clearOcrCacheFromSettings() {
 // ================ HERO COLLAPSIBLE ================
 function _toggleHeroMetrics() {
   const wrap = document.getElementById('heroMetricsWrap');
-  const text = document.getElementById('heroToggleText');
   if (!wrap) return;
   const isExpanded = wrap.classList.toggle('expanded');
-  if (text) text.innerText = isExpanded ? 'Ẩn' : 'Chi tiết';
   try { localStorage.setItem('spx_hero_expanded', isExpanded ? '1' : '0'); } catch {}
 }
 
 function _initHeroExpandState() {
   const wrap = document.getElementById('heroMetricsWrap');
-  const text = document.getElementById('heroToggleText');
   if (!wrap) return;
   const saved = localStorage.getItem('spx_hero_expanded') === '1';
   if (saved) {
     wrap.classList.add('expanded');
-    if (text) text.innerText = 'Ẩn';
   }
 }
 
@@ -180,7 +182,7 @@ function _showIncomeInfo() {
     'Nếu < 1.500 → không cộng Tài xế vào lương.\n\n' +
     'Đã tích lũy = Lương 1 công × số công\n\n' +
     'Quy đổi: Giao + Lấy/6 + Hoàn\n' +
-    '• Miền: ≥60 = 1 công, ≥30 = 0.5 công\n' +
+    '• Miền Trung: ≥60 = 1 công, ≥30 = 0.5 công\n' +
     '• TP.HCM & HN: ≥80 = 1 công, ≥40 = 0.5 công\n\n' +
     '⚡ Lương được lưu RIÊNG theo từng tháng.\n' +
     'Chuyển tháng để cấu hình tháng đó.',
@@ -289,15 +291,10 @@ async function applyUpdate() {
   }
 }
 
-// ================ v50.11.0: SHARE TARGET LAUNCH (SPX-F) ================
+// ================ SHARE TARGET LAUNCH ================
 const SHARED_CACHE_NAME = 'spx-shared-files';
 const SHARED_QUERY_KEY = 'shared';
 
-/**
- * Phát hiện app được mở từ Share Target
- * - URL có ?shared=1 → SW đã redirect về đây
- * - Hoặc pathname kết thúc bằng /share-target (khi SW chưa kịp redirect)
- */
 function _detectShareTargetLaunch() {
   try {
     const url = new URL(window.location.href);
@@ -309,11 +306,6 @@ function _detectShareTargetLaunch() {
   }
 }
 
-/**
- * Đọc File[] từ Cache API 'spx-shared-files'
- * SW ghi vào cache này sau khi nhận POST multipart/form-data
- * @returns {Promise<File[]>}
- */
 async function _consumeSharedFiles() {
   if (!('caches' in window)) return [];
 
@@ -326,8 +318,6 @@ async function _consumeSharedFiles() {
     const files = [];
     const consumedKeys = [];
 
-    // Key đầu tiên chứa metadata: /spx-shared-meta
-    // Key sau là từng file: /spx-shared-file-0, /spx-shared-file-1, ...
     const metaReq = keys.find(req => req.url.endsWith('/spx-shared-meta'));
     let meta = { count: 0, names: [], types: [] };
 
@@ -341,7 +331,6 @@ async function _consumeSharedFiles() {
       consumedKeys.push(metaReq);
     }
 
-    // Lấy từng file theo thứ tự
     for (let i = 0; i < (meta.count || 0); i++) {
       const req = keys.find(r => r.url.endsWith(`/spx-shared-file-${i}`));
       if (!req) continue;
@@ -358,10 +347,8 @@ async function _consumeSharedFiles() {
       consumedKeys.push(req);
     }
 
-    // Dọn cache các key đã lấy
     await Promise.all(consumedKeys.map(req => cache.delete(req)));
 
-    // Nếu cache còn key nào của shared (không khớp pattern), dọn luôn
     const remaining = await cache.keys();
     await Promise.all(
       remaining
@@ -376,9 +363,6 @@ async function _consumeSharedFiles() {
   }
 }
 
-/**
- * Xóa query ?shared=1 khỏi URL để không trigger lại khi reload
- */
 function _cleanShareQueryFromUrl() {
   try {
     const url = new URL(window.location.href);
@@ -389,15 +373,11 @@ function _cleanShareQueryFromUrl() {
   } catch {}
 }
 
-/**
- * Entry: chạy pipeline share target
- */
 async function _runShareTargetIfNeeded() {
   if (!_detectShareTargetLaunch()) return;
 
   console.log('[ShareTarget] Phát hiện launch từ chia sẻ ảnh');
 
-  // Delay nhỏ để DOM + Tesseract worker kịp chuẩn bị
   await new Promise(r => setTimeout(r, 400));
 
   const files = await _consumeSharedFiles();
@@ -424,7 +404,6 @@ async function _runShareTargetIfNeeded() {
     showAlert('Lỗi xử lý ảnh chia sẻ: ' + e.message, { title: 'Lỗi', okText: 'Đóng' });
   }
 }
-// ================ /SHARE TARGET LAUNCH ================
 
 // ================ EXPOSE TO WINDOW ================
 Object.assign(window, {
@@ -434,11 +413,9 @@ Object.assign(window, {
   setRankTier,
   syncRankUIForCurrentMonth,
 
-  // Auto-update
   applyUpdate,
   checkVersion,
 
-  // PERIOD BAR
   setPeriodMode,
   periodPrev,
   periodNext,
@@ -447,17 +424,10 @@ Object.assign(window, {
   jumpToDate,
   goToLatest,
 
-  // Info icon
   showIncomeInfo: _showIncomeInfo,
-
-  // Toggle OCR debug
   toggleOcrDebugText,
-
-  // OCR cache
   clearOcrCacheFromSettings: _clearOcrCacheFromSettings,
   updateOcrCacheStats: _updateOcrCacheStats,
-
-  // Reminder banner
   dismissReminderBanner,
 
   // v50.11.0: SPX-F Share Target
@@ -475,6 +445,11 @@ Object.assign(window, {
   resetHistoryFilterPanel,
   applyHistoryFilterPanel,
   clearAllHistoryFilters,
+
+  // v50.11.8: All opportunities modal
+  openAllOpportunitiesModal,
+  closeAllOpportunitiesModal,
+  setAllOppFilter,
 
   // REGION — inline onclick
   changeRegion: function(regionKey, el) {
@@ -496,7 +471,7 @@ Object.assign(window, {
 
       const label = regionKey === 'hcm_hn'
         ? 'TP.HCM & Hà Nội (80/40)'
-        : 'Miền Bắc/Trung/Nam (60/30)';
+        : 'Miền Trung (60/30)';
       showAlert(`Đã chọn khu vực: ${label}`, { title: 'Khu vực', okText: 'OK' });
     } catch (e) {
       console.error('[Region] error:', e);
@@ -522,7 +497,6 @@ Object.assign(window, {
   saveManualPoints: _saveManualPoints,
   saveSalaryConfig: _saveSalaryConfig,
 
-  // force save config vào tháng hiện tại
   forceSaveConfig: function() {
     const buuCuc = parseInt(document.getElementById('manualBuuCucInput').value, 10) || 0;
     const taiXe  = parseInt(document.getElementById('manualTaiXeInput').value, 10) || 0;
@@ -545,7 +519,7 @@ Object.assign(window, {
       `• Lương:   ${salary.toLocaleString('vi-VN')}\n` +
       `• Bưu cục: ${buuCuc.toLocaleString('vi-VN')}\n` +
       `• Tài xế:  ${taiXe.toLocaleString('vi-VN')}\n` +
-      `• Khu vực: ${state.region === 'hcm_hn' ? 'TP.HCM & HN' : 'Miền'}` +
+      `• Khu vực: ${state.region === 'hcm_hn' ? 'TP.HCM & HN' : 'Miền Trung'}` +
       taiXeNote,
       { title: 'Đã lưu cấu hình', okText: 'OK' }
     );
@@ -583,6 +557,5 @@ window.openSettingsModal = function() {
   setTimeout(checkVersion, 2000);
   setInterval(checkVersion, 5 * 60 * 1000);
 
-  // v50.11.0: Xử lý share target (nếu app được mở từ Gallery)
   _runShareTargetIfNeeded();
 })();
