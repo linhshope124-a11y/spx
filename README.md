@@ -1,8 +1,5 @@
 📄 README.md (FULL) — v50.11.7
 
-📋 Copy paste nguyên file, ghi đè README.md:
-
-```markdown
 # 🚚 SPX Tracker
 
 > PWA theo dõi sản lượng giao/lấy/hoàn & tính điểm phúc lợi SPX Express
