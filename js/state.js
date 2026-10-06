@@ -15,7 +15,7 @@ export const state = {
 
   activeTab: 'overview',
   histFilter: 'all',
-  overviewFilter: 'all',
+  overviewFilter: 'del',
 
   periodMode: 'month',
   currentMonth: getCurrentMonthIso(),
