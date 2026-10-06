@@ -1,5 +1,5 @@
 // =============================================================
-// OCR ENGINE v2.4 — PART 1/3
+// OCR ENGINE v2.5 — PART 1/3
 // Config · AbortController · Worker · Cache
 // =============================================================
 
@@ -399,7 +399,7 @@ export function getOcrCacheStats() {
   };
 }
 // =============================================================
-// OCR ENGINE v2.4 — PART 2/3
+// OCR ENGINE v2.5 — PART 2/3
 // Image · Preprocess · Parser · Validation · Scoring
 // =============================================================
 
@@ -442,7 +442,7 @@ function makeThumbnail(dataUrl, maxW = 96) {
   });
 }
 
-// ==================== DETECT ACTIVE TAB (v2.4 — text-cluster based) ====================
+// ==================== DETECT ACTIVE TAB (v2.5 — FIX zone cho gạch cam) ====================
 const TAB_MIN_CONFIDENCE = 60;
 
 // Fallback zones khi text-cluster fail (ratio của tâm gạch cam so với width)
@@ -465,8 +465,9 @@ function detectActiveTab(imageSource) {
         ctx.drawImage(img, 0, 0);
 
         // ===== 1. TÌM 3 TAB TEXT trong line tab bar =====
-        const tabY1 = Math.floor(img.height * 0.10);
-        const tabY2 = Math.floor(img.height * 0.14);
+        // v2.5: mở rộng xuống 0.145 để bắt trọn tab text
+        const tabY1 = Math.floor(img.height * 0.09);
+        const tabY2 = Math.floor(img.height * 0.145);
         const tabH  = Math.max(1, tabY2 - tabY1);
 
         const tabData = ctx.getImageData(0, tabY1, img.width, tabH).data;
@@ -510,8 +511,9 @@ function detectActiveTab(imageSource) {
         const tabCandidates = merged.filter(c => (c.end - c.start) >= 30);
 
         // ===== 2. TÌM GẠCH CAM =====
-        const camY1 = Math.floor(img.height * 0.14);
-        const camY2 = Math.floor(img.height * 0.17);
+        // v2.5: dịch xuống 0.12–0.18 để bắt đúng gạch cam (thực tế ~0.135–0.15)
+        const camY1 = Math.floor(img.height * 0.12);
+        const camY2 = Math.floor(img.height * 0.18);
         const camH  = Math.max(1, camY2 - camY1);
 
         const camData = ctx.getImageData(0, camY1, img.width, camH).data;
@@ -528,7 +530,22 @@ function detectActiveTab(imageSource) {
           }
         }
 
-        if (totalOrange < 30) { resolve(null); return; }
+        // ===== DEBUG LOG (v2.5) =====
+        console.log('[OCR Tab]', {
+          imgW: img.width, imgH: img.height,
+          tabYRange: [tabY1, tabY2],
+          camYRange: [camY1, camY2],
+          tabClusters: tabCandidates.length,
+          clusterWidths: tabCandidates.map(c => c.end - c.start),
+          totalOrange,
+          orangeColsFound: colOrange.filter(v => v > 0).length
+        });
+
+        if (totalOrange < 30) {
+          console.warn('[OCR Tab] totalOrange quá thấp → fail');
+          resolve(null);
+          return;
+        }
 
         const winSize = 40;
         let maxSum = 0, bestCenter = 0;
@@ -575,6 +592,15 @@ function detectActiveTab(imageSource) {
             conf -= Math.max(0, 30 - separation * 500);
             const confidence = Math.max(0, Math.min(100, Math.round(conf)));
 
+            console.log('[OCR Tab] match:', {
+              bestIdx, bestCenter,
+              tabCenters: sorted.map(c => Math.round((c.start + c.end) / 2)),
+              bestDist: Math.round(bestDist),
+              secondDist: Math.round(secondDist),
+              separation: separation.toFixed(3),
+              confidence
+            });
+
             if (confidence >= TAB_MIN_CONFIDENCE) {
               resolve({
                 type: TAB_ORDER[bestIdx],
@@ -587,6 +613,7 @@ function detectActiveTab(imageSource) {
         }
 
         // ===== FALLBACK: dùng zone cố định =====
+        // v2.5: fallbackConf 55 → 65 (55 < 60 luôn fail ở v2.4)
         const rel = bestCenter / img.width;
         let fallbackType = null;
         for (const z of FALLBACK_ZONES) {
@@ -594,7 +621,9 @@ function detectActiveTab(imageSource) {
         }
         if (!fallbackType) fallbackType = 'del';
 
-        const fallbackConf = 55;
+        const fallbackConf = 65;
+        console.log('[OCR Tab] fallback:', { rel: rel.toFixed(3), fallbackType, fallbackConf });
+
         if (fallbackConf < TAB_MIN_CONFIDENCE) {
           resolve(null);
           return;
@@ -1105,7 +1134,7 @@ function getTypeLabel(r) {
        : 'Hoàn';
 }
 // =============================================================
-// OCR ENGINE v2.4 — PART 3/3
+// OCR ENGINE v2.5 — PART 3/3
 // Pipeline · Routing · Modals · Batch · Exports
 // =============================================================
 
