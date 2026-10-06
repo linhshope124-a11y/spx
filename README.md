@@ -1,3 +1,8 @@
+📄 README.md (FULL) — v50.11.7
+
+📋 Copy paste nguyên file, ghi đè README.md:
+
+```markdown
 # 🚚 SPX Tracker
 
 > PWA theo dõi sản lượng giao/lấy/hoàn & tính điểm phúc lợi SPX Express
@@ -6,7 +11,7 @@
 
 ## 🌐 Truy cập nhanh
 
-👉 **https://linhshope124-a11y.github.io/Linh/**
+👉 **https://linhshope124-a11y.github.io/spx/**
 
 Cài như app:
 - **Android (Chrome):** ⋮ → Thêm vào màn hình chính
@@ -18,13 +23,17 @@ Cài như app:
 
 - 📊 **Theo dõi sản lượng** — 8 dải khối lượng Giao / Lấy / Hoàn
 - 🎯 **Tính điểm phúc lợi** — theo chính sách SPX Express
-- 📷 **Quét ảnh OCR** — chụp màn hình SPX → tự nhập liệu
+- 📷 **Quét ảnh OCR** — tự nhận diện tab (Giao/Lấy/Hoàn) chính xác ~99%
+- 📤 **Chia sẻ ảnh** — share từ Gallery → OCR tự chạy (Android Chrome)
 - 💰 **Thu nhập theo tháng** — lưu riêng từng tháng
+- ⚡ **Rule Tài xế** — chỉ cộng khi đơn Giao ≥ 1.500/tháng
 - 🏆 **Hạng thưởng** — Đồng / Bạc / Vàng / B.Kim / K.Cương
+- 🎯 **Cơ hội tăng điểm** — sort theo độ gần đạt mốc
+- 🔍 **Lọc nâng cao Nhật ký** — ngày / loại / SL đơn / trạng thái điểm
 - ☁️ **Backup Cloud** — GitHub Gist
 - 📱 **Chạy offline** — sau lần đầu tải
 - 🌙 **Dark mode**
-- ↩️ **Undo** — hoàn tác 5s
+- ↩️ **Undo** — hoàn tác 10 bước gần nhất
 
 ---
 
@@ -32,10 +41,10 @@ Cài như app:
 
 - Vanilla JS (ES Modules, không framework)
 - CSS thuần với design tokens (light/dark)
-- PWA — Service Worker + Manifest
+- PWA — Service Worker + Manifest + Share Target
 - Tesseract.js v5 — OCR tiếng Việt
 - GitHub Gist API — Cloud backup
-- localStorage — Lưu dữ liệu local
+- localStorage — Lưu dữ liệu local (sanitize-safe)
 
 **Không cần build step** — code chạy trực tiếp trên trình duyệt.
 
@@ -45,12 +54,16 @@ Cài như app:
 
 ```
 
-Linh/
+spx/
 ├── index.html              # Entry point — main app
 ├── guide.html              # Trang hướng dẫn sử dụng
-├── manifest.json           # PWA manifest
+├── manifest.json           # PWA manifest + share_target
 ├── sw.js                   # Service Worker
-├── README.md               # File này
+├── version.json            # Version check (auto-update)
+├── README.md
+├── icons/
+│   ├── icon-192.png
+│   └── icon-512.png
 ├── css/
 │   └── style.css
 └── js/
@@ -62,11 +75,12 @@ Linh/
 ├── render.js
 ├── ui.js
 ├── entry.js
-├── ocr.js
+├── ocr.js              # OCR Engine v2.6
 ├── backup.js
 ├── cloud.js
 ├── theme.js
-└── undo.js
+├── undo.js
+└── dialog.js
 
 ```
 
@@ -85,7 +99,7 @@ Linh/
 
 | Khu vực | 1 công | 0.5 công |
 |---|---|---|
-| Miền Bắc/Trung/Nam | ≥ 60 | ≥ 30 |
+| Miền Trung | ≥ 60 | ≥ 30 |
 | TP.HCM & Hà Nội | ≥ 80 | ≥ 40 |
 
 ### Số ngày tối đa
@@ -97,6 +111,8 @@ Linh/
 
 Lương 1 công = (LCB + Bưu cục + Tài xế) / số ngày tối đa
 Tích lũy      = Lương 1 công × số công đã làm
+
+⚡ Tài xế chỉ được cộng khi đơn Giao ≥ 1.500/tháng
 
 ```
 
@@ -114,8 +130,8 @@ Tổng = Gốc + (Gốc × %hạng) + Thu nhập
 ### Chạy local
 
 ```bash
-git clone https://github.com/linhshope124-a11y/Linh.git
-cd Linh
+git clone https://github.com/linhshope124-a11y/spx.git
+cd spx
 python -m http.server 8000
 ```
 
@@ -127,31 +143,29 @@ Repo tự động deploy qua GitHub Pages khi push lên main.
 
 ```bash
 git add .
-git commit -m "v50.5: mô tả thay đổi"
+git commit -m "v50.11.7: mô tả thay đổi"
 git push
 ```
 
-⚠️ Nhớ bump CACHE trong sw.js mỗi lần deploy.
+⚠️ Nhớ bump CACHE trong sw.js mỗi lần deploy (để SW force fetch file mới).
 
 ---
 
 🔄 Version History
 
 Version Thay đổi chính
-v50.5 Tách HDSD ra guide.html riêng
-v50.4.1 Đơn vị "điểm" cột ĐƯỢC
+v50.11.7 Bỏ card Phân bổ · Đổi "Miền" → "MIỀN TRUNG"
+v50.11.6 Cơ hội tăng điểm — bỏ "Tất cả", sort theo độ gần đạt mốc
+v50.11.5 Batch 1 fixes: sanitize weights · dialog block · token warning · SHA-256 · MAX_UNDO 10
+v50.11.4 Cập nhật guide.html + version.json
+v50.11.2 OCR Engine v2.5 — fix tab detection (zone-fallback + tab-cluster)
+v50.11.1 Fix PWA install (icon PNG 192/512)
+v50.11.0 Share Target + Lọc nâng cao Nhật ký + Business Rule Tài xế
+v50.10.0 OCR Engine v2.0 → v2.4 (12+ bug fixes)
+v50.9.0 Reminder banner — nhắc quét ngày thiếu
+v50.8.0 Hạng thưởng lưu riêng theo tháng
 v50.4 Thu nhập lưu theo từng tháng
-v50.3 Header cluster 3 nhóm visual
-v50.1 Label tháng có năm
-v50 Bỏ toggle Ngày, header 1 hàng
 v49 Hero + Tiles gộp, clamp font
-v48 Hero collapsible
-v47 Floating header card
-v46 Toggle Tháng/Ngày
-v45 OCR auto-save
-v44 Chốt OCR fix
-v43 Redesign chuyên nghiệp
-v42 Month picker
 
 ---
 
@@ -174,6 +188,7 @@ Quy tắc code
 · ✅ Vanilla JS — không thêm framework
 · ✅ Tiếng Việt cho UI + comment
 · ✅ Bump CACHE trong sw.js mỗi lần sửa
+· ✅ Bump version.json để trigger update banner
 · ❌ Không dùng coachmark / tooltip overlay
 · ✅ Test trên Chrome mobile trước khi push
 
@@ -185,7 +200,7 @@ Mở Issues kèm:
 
 · Ảnh chụp màn hình
 · Mô tả ngắn hành động gây lỗi
-· Phiên bản app
+· Phiên bản app (xem ở Menu ☰ → Kiểm tra cập nhật)
 
 ---
 
@@ -207,5 +222,3 @@ MIT License — tự do sử dụng, chỉnh sửa, phân phối.
 Made with ❤️ for SPX drivers
 
 ```
-
----
