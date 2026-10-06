@@ -3,8 +3,10 @@ import {
   updateAllViews, renderHistory,
   getHistFilters, setHistFilters, resetHistFilters,
   hasActiveHistFilters, countActiveHistFilters,
-  // backward compat v50.9.0
-  setHistDateFilter, getHistDateFilter
+  // v50.9.0 backward compat
+  setHistDateFilter, getHistDateFilter,
+  // v50.11.8: modal all opportunities
+  renderAllOpportunitiesList
 } from './render.js';
 import { getTodayIso, getCurrentMonthIso, formatDateDisplay } from './utils.js';
 import { toggleTheme } from './theme.js';
@@ -55,9 +57,6 @@ export function openHistoryTab() {
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
-/**
- * Reset filter history về mặc định (dùng khi vào tab Nhật ký)
- */
 function _resetHistoryView() {
   state.histFilter = 'all';
   resetHistFilters();
@@ -83,39 +82,53 @@ export function switchModalSubTab(tabKey) {
   if (pane) pane.style.display = 'block';
 }
 
-// ================ FILTERS (OVERVIEW) ================
+// ================ OVERVIEW FILTER (deprecated v50.11.8) ================
 /**
- * v50.11.6: Bấm Giao/Lấy/Hoàn → update state + lưu localStorage + re-render.
- * (Trước đây dùng DOM hide/show — không còn phù hợp vì giờ chỉ render 1 loại.)
+ * v50.11.8: KHÔNG CÒN DÙNG — card "Cơ hội tăng điểm" giờ hiện top 4 gộp 3 loại.
+ * Giữ function này để tránh vỡ import từ main.js. Không làm gì cả.
+ * @deprecated
  */
 export function setOverviewFilter(filter, el) {
-  // Validate filter
-  const valid = ['del', 'pick', 'ret'];
-  const f = valid.includes(filter) ? filter : 'del';
-
-  // Update state
-  state.overviewFilter = f;
-
-  // Persist để lần sau mở app vẫn nhớ
-  try { localStorage.setItem('spx_overview_filter', f); } catch {}
-
-  // Cập nhật active state cho nút bấm
-  if (el) {
-    const bar = el.closest('.filter-bar');
-    if (bar) bar.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
-    el.classList.add('active');
-  }
-
-  // Re-render để áp dụng sort + filter
-  updateAllViews();
+  // No-op — không còn filter ở card chính
+  console.warn('[ui] setOverviewFilter không còn dùng (v50.11.8)');
 }
 
-// ================ v50.11.0: HISTORY FILTER (SPX-H) ================
-
+// ================ ALL OPPORTUNITIES MODAL (v50.11.8) ================
 /**
- * Filter bar 4 nút cũ [Tất cả/Giao/Lấy/Hoàn]
- * Đồng bộ 2 chiều với _histFilters.types (qua API render.js)
+ * Mở modal "Xem tất cả cơ hội tăng điểm"
+ * Mặc định filter "Giao" — có thể đổi qua filter-bar trong modal
  */
+export function openAllOpportunitiesModal() {
+  const modal = document.getElementById('allOpportunitiesModal');
+  if (!modal) return;
+
+  // Reset filter về "Giao" mỗi lần mở
+  const bar = modal.querySelector('.filter-bar');
+  if (bar) {
+    bar.querySelectorAll('.filter-btn').forEach(b => {
+      b.classList.toggle('active', b.textContent.trim() === 'Giao');
+    });
+  }
+
+  // Set filter state = 'del' + render
+  if (typeof window.setAllOppFilter === 'function') {
+    // window.setAllOppFilter export từ main.js
+    const firstBtn = bar?.querySelector('.filter-btn');
+    window.setAllOppFilter('del', firstBtn);
+  } else {
+    // fallback: gọi trực tiếp render
+    renderAllOpportunitiesList();
+  }
+
+  modal.classList.add('active');
+}
+
+export function closeAllOpportunitiesModal() {
+  const modal = document.getElementById('allOpportunitiesModal');
+  if (modal) modal.classList.remove('active');
+}
+
+// ================ HISTORY FILTER (SPX-H) ================
 export function setHistFilter(filter, btn) {
   state.histFilter = filter;
 
@@ -143,9 +156,6 @@ export function setHistFilter(filter, btn) {
   renderHistory();
 }
 
-/**
- * Mở panel filter nâng cao (bottom sheet)
- */
 export function openHistoryFilterPanel() {
   _bindFilterPanelInputs();
   _fillFilterPanelFromState();
@@ -156,9 +166,6 @@ export function closeHistoryFilterPanel() {
   document.getElementById('historyFilterPanel').classList.remove('active');
 }
 
-/**
- * Nạp state filter hiện tại vào DOM panel
- */
 function _fillFilterPanelFromState() {
   const f = getHistFilters();
 
@@ -185,9 +192,6 @@ function _fillFilterPanelFromState() {
   _updateApplyBtnLabel();
 }
 
-/**
- * Bind oninput/onchange cho các input trong panel (chỉ 1 lần)
- */
 function _bindFilterPanelInputs() {
   ['filterDateFrom', 'filterDateTo', 'filterMinOrders', 'filterMaxOrders'].forEach(id => {
     const el = document.getElementById(id);
@@ -198,9 +202,6 @@ function _bindFilterPanelInputs() {
   });
 }
 
-/**
- * Đếm số filter đang bật TRONG PANEL (chưa commit)
- */
 function _countFiltersInPanel() {
   let n = 0;
 
@@ -228,9 +229,6 @@ function _updateApplyBtnLabel() {
   btn.innerText = n > 0 ? `✨ Áp dụng (${n})` : '✨ Áp dụng';
 }
 
-/**
- * Quick pick date range: today / 7d / 30d / month
- */
 export function quickPickDateRange(range, btn) {
   const today = getTodayIso();
   let from = null, to = today;
@@ -263,9 +261,6 @@ export function quickPickDateRange(range, btn) {
   _updateApplyBtnLabel();
 }
 
-/**
- * Quick pick orders range: lt50 / 50-100 / 100-200 / gt200
- */
 export function quickPickOrders(range, btn) {
   const minEl = document.getElementById('filterMinOrders');
   const maxEl = document.getElementById('filterMaxOrders');
@@ -289,27 +284,18 @@ export function quickPickOrders(range, btn) {
   _updateApplyBtnLabel();
 }
 
-/**
- * Toggle 1 chip loại đơn
- */
 export function toggleFilterType(btn) {
   if (!btn) return;
   btn.classList.toggle('active');
   _updateApplyBtnLabel();
 }
 
-/**
- * Chọn 1 radio chip điểm (loại trừ lẫn nhau)
- */
 export function pickFilterScore(score, btn) {
   document.querySelectorAll('#filterScoreChips .filter-radio-chip').forEach(b => b.classList.remove('active'));
   if (btn) btn.classList.add('active');
   _updateApplyBtnLabel();
 }
 
-/**
- * Reset form panel (CHƯA commit vào state)
- */
 export function resetHistoryFilterPanel() {
   const fromEl = document.getElementById('filterDateFrom');
   const toEl   = document.getElementById('filterDateTo');
@@ -330,9 +316,6 @@ export function resetHistoryFilterPanel() {
   _updateApplyBtnLabel();
 }
 
-/**
- * Đọc DOM panel → commit vào _histFilters → render → đóng panel
- */
 export function applyHistoryFilterPanel() {
   const fromEl = document.getElementById('filterDateFrom');
   const toEl   = document.getElementById('filterDateTo');
@@ -362,9 +345,6 @@ export function applyHistoryFilterPanel() {
   closeHistoryFilterPanel();
 }
 
-/**
- * Xóa toàn bộ filter (từ chip summary)
- */
 export function clearAllHistoryFilters() {
   resetHistFilters();
   state.histFilter = 'all';
@@ -379,9 +359,6 @@ export function clearAllHistoryFilters() {
   renderHistory();
 }
 
-/**
- * Đồng bộ 4 nút filter bar cũ theo types object
- */
 function _syncFilterBarFromTypes(types) {
   const btns = document.querySelectorAll('#tab-history .filter-bar .filter-btn');
   const onlyOne = (types.delivery && !types.pickup && !types.return) ? 'Giao'
@@ -401,20 +378,14 @@ function _syncFilterBarFromTypes(types) {
   });
 }
 
-// ---- Backward compat: 3 hàm cũ của v50.9.0 ----
+// ---- Backward compat v50.9.0 ----
 export function openHistoryDatePicker() {
   openHistoryFilterPanel();
 }
-
-export function applyHistoryDateFilter(value) {
-  // No-op — v50.11.0 đã thay bằng panel
-}
-
+export function applyHistoryDateFilter(value) {}
 export function clearHistoryDateFilter() {
   clearAllHistoryFilters();
 }
-// ================ /HISTORY FILTER ================
-
 
 // ================ PERIOD BAR ================
 export function setPeriodMode(mode, el) {
@@ -530,7 +501,7 @@ export function updatePeriodBarUI() {
   }
 }
 
-// ================ LONG-PRESS LABEL → NHẢY MỚI NHẤT ================
+// ================ LONG-PRESS LABEL ================
 let _periodLongPressAttached = false;
 function attachPeriodLabelLongPress() {
   if (_periodLongPressAttached) return;
@@ -783,10 +754,7 @@ export function closeMenuModal() {
   document.getElementById('menuModal').classList.remove('active');
 }
 
-// ================ v50.11.0: SHARE TARGET MODAL (SPX-F) ================
-/**
- * Detect trạng thái Share Target dựa vào platform + cài PWA
- */
+// ================ SHARE TARGET MODAL ================
 function _detectShareTargetStatus() {
   const ua = navigator.userAgent || '';
   const isIOS = /iPad|iPhone|iPod/.test(ua)
@@ -852,7 +820,6 @@ export function openShareTargetModal() {
 export function closeShareTargetModal() {
   document.getElementById('shareTargetModal').classList.remove('active');
 }
-// ================ /SHARE TARGET MODAL ================
 
 // ================ SETTINGS MODAL ================
 export function openSettingsModal() {
