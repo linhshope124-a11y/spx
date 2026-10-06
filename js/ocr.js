@@ -1,5 +1,5 @@
 // =============================================================
-// OCR ENGINE v2.5 — PART 1/3
+// OCR ENGINE v2.6 — PART 1/3
 // Config · AbortController · Worker · Cache
 // =============================================================
 
@@ -18,22 +18,12 @@ const LS_CACHE_PREFIX   = 'spx_ocr_cache_';
 const LS_CACHE_INDEX    = 'spx_ocr_cache_index';
 const LS_CACHE_MAX_BYTES = 4 * 1024 * 1024;
 
-// ⚠️ TEST MODE: 999 = tắt auto-save. Đổi lại 92 khi test xong!
+// Auto-save khi score >= 92
 const SCORE_AUTO_SAVE = 92;
 const SCORE_REVIEW    = 85;
 const SCORE_MAX_CHECKSUM_FAIL = 84;
 
-// ==================== 8 DẢI KHỐI LƯỢNG SPX ====================
-const SPX_RANGES = [
-  { key: '0_2',     min: 0,  max: 2,      display: '0.000 - 2.001' },
-  { key: '2_4',     min: 2,  max: 4,      display: '2.001 - 4.001' },
-  { key: '4_6',     min: 4,  max: 6,      display: '4.001 - 6.001' },
-  { key: '6_8',     min: 6,  max: 8,      display: '6.001 - 8.001' },
-  { key: '8_10',    min: 8,  max: 10,     display: '8.001 - 10.001' },
-  { key: '10_12',   min: 10, max: 12,     display: '10.001 - 12.001' },
-  { key: '12_15',   min: 12, max: 15,     display: '12.001 - 15.001' },
-  { key: 'over_15', min: 15, max: 999999, display: '15.001 - 999999.000' }
-];
+// ⚠️ v50.11.5: Xóa SPX_RANGES (dead code) — RANGE_KEY_BY_MIN thay thế
 
 const RANGE_KEY_BY_MIN = {
   0: '0_2',   2: '2_4',    4: '4_6',    6: '6_8',
@@ -191,11 +181,11 @@ async function ocrRecognize(preprocessedDataUrl, signal) {
   }
 }
 
-// ==================== HASH BLOB ====================
+// ==================== HASH BLOB (v50.11.5: SHA-256) ====================
 async function hashBlob(file) {
   try {
     const buf = await file.arrayBuffer();
-    const hashBuf = await crypto.subtle.digest('SHA-1', buf);
+    const hashBuf = await crypto.subtle.digest('SHA-256', buf);
     return Array.from(new Uint8Array(hashBuf))
       .map(b => b.toString(16).padStart(2, '0')).join('');
   } catch {
@@ -399,7 +389,7 @@ export function getOcrCacheStats() {
   };
 }
 // =============================================================
-// OCR ENGINE v2.5 — PART 2/3
+// OCR ENGINE v2.6 — PART 2/3
 // Image · Preprocess · Parser · Validation · Scoring
 // =============================================================
 
@@ -445,7 +435,6 @@ function makeThumbnail(dataUrl, maxW = 96) {
 // ==================== DETECT ACTIVE TAB (v2.5 — FIX zone cho gạch cam) ====================
 const TAB_MIN_CONFIDENCE = 60;
 
-// Fallback zones khi text-cluster fail (ratio của tâm gạch cam so với width)
 const FALLBACK_ZONES = [
   { type: 'del',  min: 0.00, max: 0.30 },
   { type: 'pick', min: 0.30, max: 0.50 },
@@ -465,7 +454,6 @@ function detectActiveTab(imageSource) {
         ctx.drawImage(img, 0, 0);
 
         // ===== 1. TÌM 3 TAB TEXT trong line tab bar =====
-        // v2.5: mở rộng xuống 0.145 để bắt trọn tab text
         const tabY1 = Math.floor(img.height * 0.09);
         const tabY2 = Math.floor(img.height * 0.145);
         const tabH  = Math.max(1, tabY2 - tabY1);
@@ -511,7 +499,6 @@ function detectActiveTab(imageSource) {
         const tabCandidates = merged.filter(c => (c.end - c.start) >= 30);
 
         // ===== 2. TÌM GẠCH CAM =====
-        // v2.5: dịch xuống 0.12–0.18 để bắt đúng gạch cam (thực tế ~0.135–0.15)
         const camY1 = Math.floor(img.height * 0.12);
         const camY2 = Math.floor(img.height * 0.18);
         const camH  = Math.max(1, camY2 - camY1);
@@ -530,7 +517,6 @@ function detectActiveTab(imageSource) {
           }
         }
 
-        // ===== DEBUG LOG (v2.5) =====
         console.log('[OCR Tab]', {
           imgW: img.width, imgH: img.height,
           tabYRange: [tabY1, tabY2],
@@ -613,7 +599,6 @@ function detectActiveTab(imageSource) {
         }
 
         // ===== FALLBACK: dùng zone cố định =====
-        // v2.5: fallbackConf 55 → 65 (55 < 60 luôn fail ở v2.4)
         const rel = bestCenter / img.width;
         let fallbackType = null;
         for (const z of FALLBACK_ZONES) {
@@ -796,10 +781,8 @@ function normalizeOcrText(text) {
     .replace(/\bO(\d)/g, '0$1')
     .replace(/(\d)O\b/g, '$10')
 
-    // OCR đọc "1" thành Ì/Í/I/l/| trước "Đơn hàng"
     .replace(/(Ì|Í|I|l|\|)(\s*)(?=Đơn\s*hàng)/gi, '1$2')
 
-    // ⭐ v2.4: Bắt hết biến thể "Đơn hàng" (bao gồm "hề")
     .replace(/[đĐ][ơơọo]n\s*h[àaàáạảãêềếệểễ]ng?/gi, 'Đơn hàng')
     .replace(/[đĐ][ơơọo]n\s*h[ềếệểễ]\b/gi, 'Đơn hàng')
     .replace(/[đĐ][ơơọo]n\s*h\b/gi, 'Đơn hàng')
@@ -931,7 +914,6 @@ function parseBlockBased(text) {
   const orderRegex = /(\d{1,6})\s*Đơn\s*hàng/i;
   const LINE_WINDOW = 3;
 
-  // v2.4: Track số đã dùng — range khác không được "ăn trộm"
   const usedMatches = new Set();
 
   ranges.forEach(r => {
@@ -1134,7 +1116,7 @@ function getTypeLabel(r) {
        : 'Hoàn';
 }
 // =============================================================
-// OCR ENGINE v2.5 — PART 3/3
+// OCR ENGINE v2.6 — PART 3/3
 // Pipeline · Routing · Modals · Batch · Exports
 // =============================================================
 
