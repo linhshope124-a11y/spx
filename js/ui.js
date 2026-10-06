@@ -61,7 +61,6 @@ export function openHistoryTab() {
 function _resetHistoryView() {
   state.histFilter = 'all';
   resetHistFilters();
-  // Reset filter bar 4 nút cũ
   document.querySelectorAll('#tab-history .filter-bar .filter-btn').forEach(b => {
     if (b.classList.contains('filter-btn-search')) return;
     if (b.classList.contains('filter-btn-date')) return;
@@ -85,17 +84,30 @@ export function switchModalSubTab(tabKey) {
 }
 
 // ================ FILTERS (OVERVIEW) ================
+/**
+ * v50.11.6: Bấm Giao/Lấy/Hoàn → update state + lưu localStorage + re-render.
+ * (Trước đây dùng DOM hide/show — không còn phù hợp vì giờ chỉ render 1 loại.)
+ */
 export function setOverviewFilter(filter, el) {
-  state.overviewFilter = filter;
-  const bar = el.closest('.filter-bar');
-  if (bar) bar.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
-  el.classList.add('active');
-  document.querySelectorAll('#overviewMilestoneList .suggestion-item').forEach(item => {
-    if (filter === 'all')       item.style.display = 'flex';
-    else if (filter === 'del')  item.style.display = item.classList.contains('sugg-del')  ? 'flex' : 'none';
-    else if (filter === 'pick') item.style.display = item.classList.contains('sugg-pick') ? 'flex' : 'none';
-    else if (filter === 'ret')  item.style.display = item.classList.contains('sugg-ret')  ? 'flex' : 'none';
-  });
+  // Validate filter
+  const valid = ['del', 'pick', 'ret'];
+  const f = valid.includes(filter) ? filter : 'del';
+
+  // Update state
+  state.overviewFilter = f;
+
+  // Persist để lần sau mở app vẫn nhớ
+  try { localStorage.setItem('spx_overview_filter', f); } catch {}
+
+  // Cập nhật active state cho nút bấm
+  if (el) {
+    const bar = el.closest('.filter-bar');
+    if (bar) bar.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+    el.classList.add('active');
+  }
+
+  // Re-render để áp dụng sort + filter
+  updateAllViews();
 }
 
 // ================ v50.11.0: HISTORY FILTER (SPX-H) ================
@@ -114,7 +126,6 @@ export function setHistFilter(filter, btn) {
   };
   setHistFilters({ types });
 
-  // Active state cho 4 nút cũ (bỏ qua chip 🔍)
   const bar = btn.closest('.filter-bar');
   if (bar) {
     bar.querySelectorAll('.filter-btn').forEach(b => {
@@ -125,7 +136,6 @@ export function setHistFilter(filter, btn) {
   }
   btn.classList.add('active');
 
-  // Đồng bộ chip trong panel (nếu đang có DOM)
   document.querySelectorAll('#filterTypeChips .filter-toggle-chip').forEach(b => {
     b.classList.toggle('active', types[b.dataset.filterType] === true);
   });
@@ -162,17 +172,14 @@ function _fillFilterPanelFromState() {
   if (minEl)  minEl.value  = f.minOrders != null ? f.minOrders : '';
   if (maxEl)  maxEl.value  = f.maxOrders != null ? f.maxOrders : '';
 
-  // Type chips
   document.querySelectorAll('#filterTypeChips .filter-toggle-chip').forEach(b => {
     b.classList.toggle('active', f.types[b.dataset.filterType] === true);
   });
 
-  // Score chips
   document.querySelectorAll('#filterScoreChips .filter-radio-chip').forEach(b => {
     b.classList.toggle('active', b.dataset.score === f.scoreFilter);
   });
 
-  // Clear active trên quick buttons
   document.querySelectorAll('.filter-quick-btn[data-range]').forEach(b => b.classList.remove('active'));
 
   _updateApplyBtnLabel();
@@ -246,7 +253,6 @@ export function quickPickDateRange(range, btn) {
   if (fromEl) fromEl.value = from || '';
   if (toEl)   toEl.value   = to || '';
 
-  // Active state: chỉ toggle cho nhóm date quick buttons
   const dateRanges = ['today', '7d', '30d', 'month'];
   document.querySelectorAll('.filter-quick-btn[data-range]').forEach(b => {
     if (dateRanges.includes(b.dataset.range)) {
@@ -350,7 +356,6 @@ export function applyHistoryFilterPanel() {
     scoreFilter: score
   });
 
-  // Đồng bộ lại filter bar 4 nút cũ theo types mới
   _syncFilterBarFromTypes(types);
 
   renderHistory();
@@ -364,7 +369,6 @@ export function clearAllHistoryFilters() {
   resetHistFilters();
   state.histFilter = 'all';
 
-  // Đồng bộ filter bar 4 nút cũ về "Tất cả"
   document.querySelectorAll('#tab-history .filter-bar .filter-btn').forEach(b => {
     if (b.classList.contains('filter-btn-search')) return;
     if (b.classList.contains('filter-btn-date')) return;
@@ -399,7 +403,6 @@ function _syncFilterBarFromTypes(types) {
 
 // ---- Backward compat: 3 hàm cũ của v50.9.0 ----
 export function openHistoryDatePicker() {
-  // Redirect sang panel filter nâng cao
   openHistoryFilterPanel();
 }
 
@@ -795,7 +798,6 @@ function _detectShareTargetStatus() {
     || window.matchMedia('(display-mode: fullscreen)').matches
     || window.matchMedia('(display-mode: minimal-ui)').matches;
 
-  // Chưa cài PWA → chưa kích hoạt
   if (!isStandalone) {
     return {
       type: 'inactive',
@@ -805,7 +807,6 @@ function _detectShareTargetStatus() {
     };
   }
 
-  // iOS → hỗ trợ hạn chế
   if (isIOS) {
     return {
       type: 'limited',
@@ -815,7 +816,6 @@ function _detectShareTargetStatus() {
     };
   }
 
-  // Android đã cài PWA → full support
   if (isAndroid) {
     return {
       type: 'active',
@@ -825,7 +825,6 @@ function _detectShareTargetStatus() {
     };
   }
 
-  // Desktop hoặc khác
   return {
     type: 'inactive',
     icon: '💻',
