@@ -54,15 +54,22 @@ export function showConfirm(message, options = {}) {
 
 /**
  * Mở dialog nội bộ
+ *
+ * v50.11.5: Nếu đang có dialog mở → BLOCK dialog mới (không đóng dialog cũ).
+ * Dialog mới tự resolve với giá trị mặc định:
+ *   - confirm → false (coi như user Cancel)
+ *   - alert   → undefined
  */
 function _openDialog({ type, title, message, okText, cancelText, danger, resolve }) {
-  // Nếu đang có dialog mở → tự đóng với kết quả mặc định (false / undefined)
+  // ⚠️ Có dialog đang mở → block, không tự đóng dialog cũ
   if (_currentResolve) {
-    const prevResolve = _currentResolve;
-    const prevType = _currentType;
-    _currentResolve = null;
-    _currentType = 'alert';
-    prevResolve(prevType === 'confirm' ? false : undefined);
+    console.warn('[Dialog] Bị block — dialog khác đang mở:', {
+      currentType: _currentType,
+      newType: type,
+      newTitle: title
+    });
+    resolve(type === 'confirm' ? false : undefined);
+    return;
   }
 
   _currentResolve = resolve;
@@ -79,6 +86,7 @@ function _openDialog({ type, title, message, okText, cancelText, danger, resolve
   if (!shade || !titleEl || !msgEl || !okBtn || !cancelBtn) {
     console.warn('[Dialog] Modal chưa có trong HTML → fallback về native');
     _currentResolve = null;
+    _currentType = 'alert';
     if (type === 'confirm') {
       resolve(window.confirm(message));
     } else {
