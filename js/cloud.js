@@ -12,6 +12,8 @@ import { showAlert, showConfirm } from './dialog.js';
 const GH_API = 'https://api.github.com';
 const GIST_FILENAME = 'spx-tracker-backup.json';
 
+const TOKEN_WARN_ACK_KEY = 'spx_gh_token_warn_ack';
+
 const getToken    = () => localStorage.getItem('spx_gh_token') || '';
 const getGistId   = () => localStorage.getItem('spx_gist_id') || '';
 const isAutoBackup = () => localStorage.getItem('spx_auto_backup') === '1';
@@ -38,12 +40,51 @@ function buildPayload() {
   };
 }
 
+// ==================== v50.11.5: TOKEN WARNING ====================
+/**
+ * Cảnh báo user token lưu dạng plaintext lần đầu.
+ * Chỉ hiện 1 lần duy nhất (đã ack thì thôi).
+ * @returns {Promise<boolean>} true = đồng ý lưu, false = hủy
+ */
+async function ensureTokenWarning() {
+  if (localStorage.getItem(TOKEN_WARN_ACK_KEY) === '1') return true;
+
+  const ok = await showConfirm(
+    '⚠️ Lưu ý bảo mật\n\n' +
+    'Token GitHub sẽ được lưu trên thiết bị này để tự động backup.\n\n' +
+    '• Token được lưu dạng plaintext (chưa mã hóa)\n' +
+    '• Nếu ai truy cập được máy bạn → có thể đọc được token\n' +
+    '• Nếu nghi ngờ bị lộ → vào GitHub → Revoke token ngay\n\n' +
+    'Bạn có muốn tiếp tục lưu token?',
+    {
+      title: '🔒 Lưu token',
+      okText: 'Đồng ý lưu',
+      cancelText: 'Hủy',
+      danger: false
+    }
+  );
+
+  if (ok) {
+    try { localStorage.setItem(TOKEN_WARN_ACK_KEY, '1'); } catch {}
+  }
+  return ok;
+}
+// ==================== /TOKEN WARNING ====================
+
 // ==================== TEST CONNECTION ====================
 export async function testCloudConnection() {
   const input = document.getElementById('ghTokenInput');
   const token = (input?.value || '').trim() || getToken();
 
   if (!token) { setStatus('❌ Chưa nhập token', 'err'); return; }
+
+  // Nếu user đang nhập token MỚI → cảnh báo bảo mật trước
+  const isNewToken = !!(input?.value?.trim());
+  if (isNewToken) {
+    const ok = await ensureTokenWarning();
+    if (!ok) { setStatus('Đã hủy lưu token', 'idle'); return; }
+  }
+
   setStatus('⏳ Đang kiểm tra...', 'idle');
   try {
     const res = await fetch(`${GH_API}/user`, {
@@ -68,6 +109,9 @@ export async function pushToCloud() {
   if (!token) { setStatus('❌ Chưa có token', 'err'); return; }
 
   if (input?.value?.trim()) {
+    const ok = await ensureTokenWarning();
+    if (!ok) { setStatus('Đã hủy lưu token', 'idle'); return; }
+
     localStorage.setItem('spx_gh_token', input.value.trim());
     input.value = '';
     updateTokenUI();
@@ -140,6 +184,9 @@ export async function pullFromCloud() {
   if (!ok) return;
 
   if (input?.value?.trim()) {
+    const warnOk = await ensureTokenWarning();
+    if (!warnOk) { setStatus('Đã hủy lưu token', 'idle'); return; }
+
     localStorage.setItem('spx_gh_token', input.value.trim());
     input.value = '';
     updateTokenUI();
