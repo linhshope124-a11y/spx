@@ -4,8 +4,13 @@ import { lookupTier, aggregateWeights, isDateInCurrentPeriod } from './calc.js';
 import { formatPts, formatDateDisplay, _fmt, getCurrentMonthIso, getTodayIso } from './utils.js';
 
 const NEED_HIGHLIGHT = 'color:#dc2626;font-size:1.35em;font-weight:900;letter-spacing:0.5px;';
+const TOP_OVERVIEW_COUNT = 4;   // v50.11.8: hiện top 4 ở card chính
 
 let _lastDataHash = null;
+
+// v50.11.8: state filter cho modal "Xem tất cả"
+let _allOppFilter = 'del';
+let _allOppCache = [];          // cache toàn bộ suggestions đã sort
 
 // ==================== v50.11.0: SPX-H HISTORY FILTERS ====================
 const DEFAULT_HIST_FILTERS = {
@@ -294,7 +299,7 @@ function updateHeroContextLabel() {
   el.innerText = `Tháng ${parseInt(m, 10)}/${y}`;
 }
 
-// ==================== v50.11.0: TÀI XẾ CONDITION BANNER ====================
+// ==================== TÀI XẾ CONDITION BANNER ====================
 const TAIXE_ORDER_THRESHOLD = 1500;
 
 function renderTaiXeConditionBanner(delOrders, taiXeAmount) {
@@ -376,6 +381,9 @@ function renderRow(weightLabel, orders, tier, typeClass) {
     <td class="next-cell gain-cell">${gainText}</td>`;
 }
 
+/**
+ * Trả về object { type, need, gain, html } để sort + filter.
+ */
 function buildOverviewSuggestion(type, label, orders, tier) {
   if (orders <= 0 || !tier.next || !isFinite(tier.matched.maxA)) return null;
   const need  = tier.matched.maxA - orders;
@@ -390,6 +398,60 @@ function buildOverviewSuggestion(type, label, orders, tier) {
   </div>`;
   return { type, need, gain, html };
 }
+
+// ==================== RENDER OVERVIEW SUGGESTIONS (Top 4) ====================
+function renderOverviewSuggestions(sorted) {
+  const ovBox = document.getElementById('overviewMilestoneList');
+  const btnViewAll = document.getElementById('viewAllOpportunitiesBtn');
+
+  if (!ovBox) return;
+
+  if (sorted.length === 0) {
+    ovBox.innerHTML = `<div style="font-size:11.5px;color:var(--text-3);text-align:center;padding:16px">Không có cơ hội tăng điểm nào trong kỳ này</div>`;
+    if (btnViewAll) btnViewAll.style.display = 'none';
+    return;
+  }
+
+  const top = sorted.slice(0, TOP_OVERVIEW_COUNT);
+  ovBox.innerHTML = top.map(o => o.html).join('');
+
+  if (btnViewAll) {
+    btnViewAll.style.display = sorted.length > TOP_OVERVIEW_COUNT ? 'flex' : 'none';
+  }
+}
+
+// ==================== RENDER ALL OPPORTUNITIES (modal) ====================
+export function renderAllOpportunitiesList() {
+  const box = document.getElementById('allOpportunitiesList');
+  if (!box) return;
+
+  const filtered = _allOppCache.filter(o => o.type === _allOppFilter);
+  if (filtered.length === 0) {
+    const label = _allOppFilter === 'del' ? 'Giao' : _allOppFilter === 'pick' ? 'Lấy' : 'Hoàn';
+    box.innerHTML = `<div style="font-size:12px;color:var(--text-3);text-align:center;padding:24px 16px">Không có cơ hội tăng điểm cho loại ${label}</div>`;
+    return;
+  }
+  box.innerHTML = filtered.map(o => o.html).join('');
+}
+
+export function setAllOppFilter(filter, btn) {
+  const valid = ['del', 'pick', 'ret'];
+  _allOppFilter = valid.includes(filter) ? filter : 'del';
+
+  const bar = btn?.closest('.filter-bar');
+  if (bar) {
+    bar.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+    if (btn) btn.classList.add('active');
+  }
+
+  renderAllOpportunitiesList();
+}
+
+export function getAllOppFilter() {
+  return _allOppFilter;
+}
+// ==================== /RENDER ALL OPPORTUNITIES ====================
+
 
 // ==================== UPDATE ALL VIEWS ====================
 function _updateAllViews() {
@@ -425,30 +487,26 @@ function _updateAllViews() {
     const o3 = buildOverviewSuggestion('ret',  WEIGHT_LABELS[col], rOrders, rTier); if (o3) ovSuggBuf.push(o3);
   }
 
-  const ovBox = document.getElementById('overviewMilestoneList');
+  // Sort: need tăng dần, tie-break gain giảm dần
+  ovSuggBuf.sort((a, b) => {
+    if (a.need !== b.need) return a.need - b.need;
+    if (a.gain !== b.gain) return b.gain - a.gain;
+    return 0;
+  });
+
+  // Cache toàn bộ để modal "Xem tất cả" dùng
+  _allOppCache = ovSuggBuf;
+
+  // Render top 4 ở card chính (không giới hạn loại)
   if (total.del + total.pick + total.ret === 0) {
-    const emptyMsg = 'Chưa có dữ liệu kỳ này. Bấm menu → Nhập sản lượng để bắt đầu.';
-    ovBox.innerHTML = `<div style="font-size:11.5px;color:var(--text-3);text-align:center;padding:16px">${emptyMsg}</div>`;
-  } else {
-    // v50.11.6: Sort need tăng dần, tie-break gain giảm dần
-    ovSuggBuf.sort((a, b) => {
-      if (a.need !== b.need) return a.need - b.need;
-      if (a.gain !== b.gain) return b.gain - a.gain;
-      return 0;
-    });
-
-    // v50.11.6: Chỉ hiện loại đang chọn (mặc định 'del')
-    const ovFilter = (state.overviewFilter === 'pick' || state.overviewFilter === 'ret')
-      ? state.overviewFilter
-      : 'del';
-    const filtered = ovSuggBuf.filter(o => o.type === ovFilter);
-
-    if (filtered.length === 0) {
-      const label = ovFilter === 'del' ? 'Giao' : ovFilter === 'pick' ? 'Lấy' : 'Hoàn';
-      ovBox.innerHTML = `<div style="font-size:11.5px;color:var(--text-3);text-align:center;padding:16px">Không có cơ hội tăng điểm cho loại ${label}</div>`;
-    } else {
-      ovBox.innerHTML = filtered.map(o => o.html).join('');
+    const ovBox = document.getElementById('overviewMilestoneList');
+    const btnViewAll = document.getElementById('viewAllOpportunitiesBtn');
+    if (ovBox) {
+      ovBox.innerHTML = `<div style="font-size:11.5px;color:var(--text-3);text-align:center;padding:16px">Chưa có dữ liệu kỳ này. Bấm menu → Nhập sản lượng để bắt đầu.</div>`;
     }
+    if (btnViewAll) btnViewAll.style.display = 'none';
+  } else {
+    renderOverviewSuggestions(ovSuggBuf);
   }
 
   const rawBase = delPts + pickPts + retPts;
@@ -528,8 +586,6 @@ function _updateAllViews() {
     `${_fmt(retPts)} <span class="hero-value-unit">Điểm</span>`;
   document.getElementById('retTotalOrders').innerText = `${_fmt(total.ret)} đơn`;
 
-  // ===== v50.11.7: Đã bỏ block render RATIO BAR (không dùng nữa) =====
-
   // ===== Income UI =====
   const salaryBaseEl   = document.getElementById('salaryBaseInput');
   const buuCucInput    = document.getElementById('manualBuuCucInput');
@@ -561,14 +617,20 @@ function _updateAllViews() {
     ? displayDays.toString()
     : displayDays.toFixed(1);
 
-  if (incomeDayCount) incomeDayCount.innerText = `${workDaysText}/${salaryDays} công`;
+  const progressPct = salaryDays > 0
+    ? Math.min(100, Math.round((displayDays / salaryDays) * 100))
+    : 0;
+
+  // v50.11.8: hiện % cạnh "x/26 công"
+  if (incomeDayCount) {
+    incomeDayCount.innerText = `${workDaysText}/${salaryDays} công · ${progressPct}%`;
+  }
   if (incomePerDay)   incomePerDay.innerText   = formatPts(Math.round(perDay)) + '/công';
   if (incomeTotal)    incomeTotal.innerText    = '+' + formatPts(incomeAccumulated);
   if (incomeTotalInner) incomeTotalInner.innerText = '+' + formatPts(incomeAccumulated);
 
   if (progressFill) {
-    const pct = salaryDays > 0 ? Math.min(100, Math.round((displayDays / salaryDays) * 100)) : 0;
-    progressFill.style.width = pct + '%';
+    progressFill.style.width = progressPct + '%';
   }
 
   renderTaiXeConditionBanner(delOrders, manualTaiXe);
