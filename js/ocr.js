@@ -1,5 +1,5 @@
 // =============================================================
-// OCR ENGINE v2.3 — PART 1/3
+// OCR ENGINE v2.4 — PART 1/3
 // Config · AbortController · Worker · Cache
 // =============================================================
 
@@ -18,8 +18,8 @@ const LS_CACHE_PREFIX   = 'spx_ocr_cache_';
 const LS_CACHE_INDEX    = 'spx_ocr_cache_index';
 const LS_CACHE_MAX_BYTES = 4 * 1024 * 1024;
 
-// ⚠️ TEST MODE: 999 = tắt auto-save để luôn hiện Review Modal. Nhớ đổi lại 92 khi test xong!
-const SCORE_AUTO_SAVE = 92;
+// ⚠️ TEST MODE: 999 = tắt auto-save. Đổi lại 92 khi test xong!
+const SCORE_AUTO_SAVE = 999;
 const SCORE_REVIEW    = 85;
 const SCORE_MAX_CHECKSUM_FAIL = 84;
 
@@ -399,7 +399,7 @@ export function getOcrCacheStats() {
   };
 }
 // =============================================================
-// OCR ENGINE v2.3 — PART 2/3
+// OCR ENGINE v2.4 — PART 2/3
 // Image · Preprocess · Parser · Validation · Scoring
 // =============================================================
 
@@ -442,14 +442,15 @@ function makeThumbnail(dataUrl, maxW = 96) {
   });
 }
 
-// ==================== DETECT ACTIVE TAB ====================
-const TAB_ZONES = [
-  { type: 'del',  min: 0.00, max: 0.33 },
-  { type: 'pick', min: 0.33, max: 0.66 },
-  { type: 'ret',  min: 0.66, max: 1.00 }
-];
-
+// ==================== DETECT ACTIVE TAB (v2.4 — text-cluster based) ====================
 const TAB_MIN_CONFIDENCE = 60;
+
+// Fallback zones khi text-cluster fail (ratio của tâm gạch cam so với width)
+const FALLBACK_ZONES = [
+  { type: 'del',  min: 0.00, max: 0.30 },
+  { type: 'pick', min: 0.30, max: 0.50 },
+  { type: 'ret',  min: 0.50, max: 1.00 }
+];
 
 function detectActiveTab(imageSource) {
   return new Promise(resolve => {
@@ -463,22 +464,65 @@ function detectActiveTab(imageSource) {
         const ctx = canvas.getContext('2d', { willReadFrequently: true });
         ctx.drawImage(img, 0, 0);
 
-        const scanY1 = Math.floor(img.height * 0.10);
-        const scanY2 = Math.floor(img.height * 0.20);
-        const scanH  = scanY2 - scanY1;
+        // ===== 1. TÌM 3 TAB TEXT trong line tab bar =====
+        const tabY1 = Math.floor(img.height * 0.10);
+        const tabY2 = Math.floor(img.height * 0.14);
+        const tabH  = Math.max(1, tabY2 - tabY1);
 
-        const imgData = ctx.getImageData(0, scanY1, img.width, scanH);
-        const data = imgData.data;
+        const tabData = ctx.getImageData(0, tabY1, img.width, tabH).data;
 
-        const colCount = new Array(img.width).fill(0);
-        let totalOrange = 0;
-
-        for (let y = 0; y < scanH; y++) {
+        const darkCount = new Array(img.width).fill(0);
+        for (let y = 0; y < tabH; y++) {
           for (let x = 0; x < img.width; x++) {
             const idx = (y * img.width + x) * 4;
-            const r = data[idx], g = data[idx+1], b = data[idx+2];
+            const r = tabData[idx], g = tabData[idx+1], b = tabData[idx+2];
+            const gray = 0.299*r + 0.587*g + 0.114*b;
+            if (gray < 120) darkCount[x]++;
+          }
+        }
+
+        const MIN_DARK = 3;
+        const clusters = [];
+        let clusterStart = -1;
+        for (let x = 0; x < img.width; x++) {
+          if (darkCount[x] >= MIN_DARK) {
+            if (clusterStart === -1) clusterStart = x;
+          } else {
+            if (clusterStart !== -1) {
+              clusters.push({ start: clusterStart, end: x - 1 });
+              clusterStart = -1;
+            }
+          }
+        }
+        if (clusterStart !== -1) {
+          clusters.push({ start: clusterStart, end: img.width - 1 });
+        }
+
+        const merged = [];
+        clusters.forEach(c => {
+          if (merged.length > 0 && c.start - merged[merged.length-1].end < 20) {
+            merged[merged.length-1].end = c.end;
+          } else {
+            merged.push({ start: c.start, end: c.end });
+          }
+        });
+
+        const tabCandidates = merged.filter(c => (c.end - c.start) >= 30);
+
+        // ===== 2. TÌM GẠCH CAM =====
+        const camY1 = Math.floor(img.height * 0.14);
+        const camY2 = Math.floor(img.height * 0.17);
+        const camH  = Math.max(1, camY2 - camY1);
+
+        const camData = ctx.getImageData(0, camY1, img.width, camH).data;
+        const colOrange = new Array(img.width).fill(0);
+        let totalOrange = 0;
+        for (let y = 0; y < camH; y++) {
+          for (let x = 0; x < img.width; x++) {
+            const idx = (y * img.width + x) * 4;
+            const r = camData[idx], g = camData[idx+1], b = camData[idx+2];
             if (r > 180 && g >= 40 && g <= 155 && b <= 90 && (r - g) > 45) {
-              colCount[x]++;
+              colOrange[x]++;
               totalOrange++;
             }
           }
@@ -492,27 +536,75 @@ function detectActiveTab(imageSource) {
           let sum = 0;
           const l = Math.max(0, x - winSize);
           const r = Math.min(img.width - 1, x + winSize);
-          for (let k = l; k <= r; k++) sum += colCount[k];
+          for (let k = l; k <= r; k++) sum += colOrange[k];
           if (sum > maxSum) { maxSum = sum; bestCenter = x; }
         }
 
-        const rel = bestCenter / img.width;
+        // ===== 3. MATCH gạch cam với 3 tab =====
+        if (tabCandidates.length >= 3) {
+          const sorted = [...tabCandidates]
+            .sort((a, b) => (b.end - b.start) - (a.end - a.start))
+            .slice(0, 3)
+            .sort((a, b) => a.start - b.start);
 
-        let matched = null;
-        for (const z of TAB_ZONES) {
-          if (rel >= z.min && rel < z.max) { matched = z; break; }
+          const TAB_ORDER = ['del', 'pick', 'ret'];
+
+          let bestIdx = -1;
+          let bestDist = Infinity;
+          let secondDist = Infinity;
+
+          sorted.forEach((c, i) => {
+            const center = (c.start + c.end) / 2;
+            const dist = Math.abs(bestCenter - center);
+            if (dist < bestDist) {
+              secondDist = bestDist;
+              bestDist = dist;
+              bestIdx = i;
+            } else if (dist < secondDist) {
+              secondDist = dist;
+            }
+          });
+
+          if (bestIdx >= 0) {
+            const width = img.width;
+            const relativeDist = bestDist / width;
+            const separation   = (secondDist - bestDist) / width;
+
+            let conf = 100;
+            conf -= Math.min(40, relativeDist * 300);
+            conf -= Math.max(0, 30 - separation * 500);
+            const confidence = Math.max(0, Math.min(100, Math.round(conf)));
+
+            if (confidence >= TAB_MIN_CONFIDENCE) {
+              resolve({
+                type: TAB_ORDER[bestIdx],
+                confidence,
+                method: 'tab-cluster'
+              });
+              return;
+            }
+          }
         }
-        if (!matched) matched = TAB_ZONES[0];
 
-        const zoneCenter = (matched.min + matched.max) / 2;
-        const distance   = Math.abs(rel - zoneCenter);
-        const zoneHalfWidth = (matched.max - matched.min) / 2;
-        const distanceRatio = Math.min(1, distance / zoneHalfWidth);
-        const confidence = Math.round(100 - distanceRatio * 40);
+        // ===== FALLBACK: dùng zone cố định =====
+        const rel = bestCenter / img.width;
+        let fallbackType = null;
+        for (const z of FALLBACK_ZONES) {
+          if (rel >= z.min && rel < z.max) { fallbackType = z.type; break; }
+        }
+        if (!fallbackType) fallbackType = 'del';
 
-        if (confidence < TAB_MIN_CONFIDENCE) { resolve(null); return; }
+        const fallbackConf = 55;
+        if (fallbackConf < TAB_MIN_CONFIDENCE) {
+          resolve(null);
+          return;
+        }
 
-        resolve({ type: matched.type, confidence });
+        resolve({
+          type: fallbackType,
+          confidence: fallbackConf,
+          method: 'zone-fallback'
+        });
       } catch (err) {
         console.warn('[OCR] detectActiveTab error:', err);
         resolve(null);
@@ -675,11 +767,13 @@ function normalizeOcrText(text) {
     .replace(/\bO(\d)/g, '0$1')
     .replace(/(\d)O\b/g, '$10')
 
-    // ⭐ v2.3 FIX: OCR đọc "1" thành Ì/Í/I/l/| — chỉ khi trước "Đơn hàng"
+    // OCR đọc "1" thành Ì/Í/I/l/| trước "Đơn hàng"
     .replace(/(Ì|Í|I|l|\|)(\s*)(?=Đơn\s*hàng)/gi, '1$2')
 
-    // Fix 12+ biến thể "Đơn hàng"
-    .replace(/[đĐ][ơơọo]n\s*h[àa]ng?/gi, 'Đơn hàng')
+    // ⭐ v2.4: Bắt hết biến thể "Đơn hàng" (bao gồm "hề")
+    .replace(/[đĐ][ơơọo]n\s*h[àaàáạảãêềếệểễ]ng?/gi, 'Đơn hàng')
+    .replace(/[đĐ][ơơọo]n\s*h[ềếệểễ]\b/gi, 'Đơn hàng')
+    .replace(/[đĐ][ơơọo]n\s*h\b/gi, 'Đơn hàng')
     .replace(/[đĐ][ơơọo]nh\b/gi, 'Đơn hàng')
     .replace(/[đĐ]nh\b/gi, 'Đơn hàng')
     .replace(/[đĐ]n\s*h[àa]ng/gi, 'Đơn hàng')
@@ -808,7 +902,7 @@ function parseBlockBased(text) {
   const orderRegex = /(\d{1,6})\s*Đơn\s*hàng/i;
   const LINE_WINDOW = 3;
 
-  // ⭐ v2.3: Track số đã dùng — range khác không được "ăn trộm"
+  // v2.4: Track số đã dùng — range khác không được "ăn trộm"
   const usedMatches = new Set();
 
   ranges.forEach(r => {
@@ -830,8 +924,6 @@ function parseBlockBased(text) {
       while ((mm = re.exec(line)) !== null) {
         const absPos = lineStart + mm.index;
         if (isInsideTotal(absPos)) continue;
-
-        // ⭐ v2.3: Skip nếu số này đã bị range khác lấy
         if (usedMatches.has(absPos)) continue;
 
         const val = parseInt(mm[1], 10);
@@ -847,7 +939,6 @@ function parseBlockBased(text) {
 
     if (best && weights[key] === 0) {
       weights[key] = best.value;
-      // ⭐ v2.3: Mark số đã dùng
       if (best.absPos != null) usedMatches.add(best.absPos);
     }
   });
@@ -1014,7 +1105,7 @@ function getTypeLabel(r) {
        : 'Hoàn';
 }
 // =============================================================
-// OCR ENGINE v2.3 — PART 3/3
+// OCR ENGINE v2.4 — PART 3/3
 // Pipeline · Routing · Modals · Batch · Exports
 // =============================================================
 
@@ -1084,7 +1175,7 @@ function scoreResult(parsed) {
 
 // ==================== BUILD FINAL RESULT ====================
 function buildFinalResult({
-  parsed, rawText, detectedColorType, tabConfidence,
+  parsed, rawText, detectedColorType, tabConfidence, tabMethod,
   scoreBundle, attempts, blobUrl
 }) {
   const confidences = {};
@@ -1095,6 +1186,7 @@ function buildFinalResult({
   return {
     detectedColorType,
     tabConfidence: tabConfidence || 0,
+    tabMethod: tabMethod || '',
     parsedDate:    parsed.parsedDate,
     weights:       parsed.weights,
     confidences,
@@ -1145,6 +1237,7 @@ async function processOneFile(file, signal) {
   const tabInfo = await detectActiveTab(dataUrl);
   const detectedColorType = tabInfo ? tabInfo.type : null;
   const tabConfidence = tabInfo ? tabInfo.confidence : 0;
+  const tabMethod = tabInfo ? (tabInfo.method || '') : '';
 
   let bestBundle = null;
   let bestScore  = -1;
@@ -1205,6 +1298,7 @@ async function processOneFile(file, signal) {
     rawText:         bestBundle.rawText,
     detectedColorType,
     tabConfidence,
+    tabMethod,
     scoreBundle:     bestBundle.scoreBundle,
     attempts,
     blobUrl
@@ -1281,7 +1375,6 @@ export async function copyOcrLog() {
     return;
   }
 
-  // Thử Clipboard API
   try {
     if (navigator.clipboard?.writeText) {
       await navigator.clipboard.writeText(text);
@@ -1292,7 +1385,6 @@ export async function copyOcrLog() {
     console.warn('[OCR] Clipboard API fail:', e);
   }
 
-  // Fallback: textarea + execCommand
   try {
     const ta = document.createElement('textarea');
     ta.value = text;
@@ -1602,6 +1694,7 @@ async function _runOcrFromFiles(files, wasAppend = false) {
 
       item.result.detectedColorType = type;
       item.result.tabConfidence = 100;
+      item.result.tabMethod = 'user-picker';
 
       if (findExactDuplicate(item.result)) {
         duplicates.push({ item, kind: 'exact' });
@@ -1736,7 +1829,7 @@ export function fillModalFromResult(item) {
   if (debugEl) {
     const scoreStr = `[Score ${r.score.final} — Total ${r.score.total} / Structure ${r.score.structure} / OCR ${r.score.ocr} / Dist ${r.score.distribution}]`;
     const checksumStr = `[Checksum ${r.score.checksumOk ? 'OK' : 'FAIL'} — Expected ${r.expectedTotal} vs Actual ${r.actualTotal}]`;
-    const tabStr = `[Tab ${r.detectedColorType || '?'} (conf ${r.tabConfidence || 0})]`;
+    const tabStr = `[Tab ${r.detectedColorType || '?'} (conf ${r.tabConfidence || 0}) · ${r.tabMethod || '?'}]`;
     const attemptStr = `[Attempts ${r.attempts || 1} · ${r.parseMode || '?'}]`;
     debugEl.innerText = `${scoreStr}\n${checksumStr}\n${tabStr}\n${attemptStr}\n\n${r.rawText || '(không có text)'}`;
     debugEl.style.display = 'none';
@@ -1744,7 +1837,6 @@ export function fillModalFromResult(item) {
     if (toggleBtn) {
       toggleBtn.innerText = 'Xem log';
 
-      // ⭐ v2.2: Inject nút Copy log bên cạnh
       if (!document.getElementById('ocrCopyLogBtn')) {
         const copyBtn = document.createElement('button');
         copyBtn.id = 'ocrCopyLogBtn';
@@ -2013,6 +2105,7 @@ export async function importBatchItem(idx) {
     }
     r.detectedColorType = type;
     r.tabConfidence = 100;
+    r.tabMethod = 'user-picker';
   }
 
   const type = getTypeFromResult(r);
