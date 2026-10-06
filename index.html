@@ -158,31 +158,6 @@
           </div>
         </section>
 
-        <section class="card card-ratio">
-          <div class="card-head-inline card-head-ratio">
-            <span class="card-label">Phân bổ</span>
-          </div>
-
-          <div id="ratioContent">
-            <div class="ratio-bar" id="ratioBar">
-              <div class="ratio-seg ratio-seg-del"  id="ratioBarDel"  style="width:33.3%"></div>
-              <div class="ratio-seg ratio-seg-pick" id="ratioBarPick" style="width:33.3%"></div>
-              <div class="ratio-seg ratio-seg-ret"  id="ratioBarRet"  style="width:33.4%"></div>
-            </div>
-            <div class="ratio-legend ratio-legend-inline">
-              <span class="legend-inline-item"><span class="dot dot-giao"></span><b id="ratioPctDel">0%</b></span>
-              <span class="legend-inline-sep">·</span>
-              <span class="legend-inline-item"><span class="dot dot-lay"></span><b id="ratioPctPick">0%</b></span>
-              <span class="legend-inline-sep">·</span>
-              <span class="legend-inline-item"><span class="dot dot-hoan"></span><b id="ratioPctRet">0%</b></span>
-            </div>
-          </div>
-
-          <div class="ratio-empty" id="ratioEmpty" style="display:none">
-            Chưa có đơn nào trong kỳ này
-          </div>
-        </section>
-
         <details class="card income-section" id="incomeDetails">
           <summary class="income-summary">
             <div class="income-summary-left">
@@ -216,10 +191,10 @@
               <span class="income-row-label">Khu vực tính công</span>
               <div class="region-pill-group">
                 <button type="button" class="region-pill" data-region="mien" onclick="changeRegion('mien', this)">
-                  <span>Miền</span><span>60/30</span>
+                  <span>MIỀN TRUNG</span>
                 </button>
                 <button type="button" class="region-pill" data-region="hcm_hn" onclick="changeRegion('hcm_hn', this)">
-                  <span>TP.HCM · HN</span><span>80/40</span>
+                  <span>TP.HCM · HN</span>
                 </button>
               </div>
             </div>
@@ -406,11 +381,9 @@
             <button class="filter-btn" onclick="setHistFilter('delivery', this)">Giao</button>
             <button class="filter-btn" onclick="setHistFilter('pickup', this)">Lấy</button>
             <button class="filter-btn" onclick="setHistFilter('return', this)">Hoàn</button>
-            <!-- v50.11.0: Chip filter nâng cao (thay 📅 Ngày) -->
             <button class="filter-btn filter-btn-search" id="histFilterChip" onclick="openHistoryFilterPanel()">🔍 Lọc</button>
           </div>
 
-          <!-- v50.11.0: Chip summary khi filter active -->
           <div class="hist-filter-summary" id="histFilterSummary" style="display:none">
             <div class="hist-filter-summary-head">
               <span class="hist-filter-summary-count" id="histFilterSummaryCount">🔍 0 filter đang bật</span>
@@ -552,7 +525,6 @@
         </div>
       </button>
 
-      <!-- v50.11.0: SPX-F — Menu item Chia sẻ ảnh -->
       <button class="menu-item" onclick="closeMenuModal();openShareTargetModal()">
         <span class="menu-icon">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -863,7 +835,7 @@
   </div>
 </div>
 
-<!-- ============ v50.11.0: SPX-F SHARE TARGET MODAL ============ -->
+<!-- ============ SHARE TARGET MODAL ============ -->
 <div class="modal-shade" id="shareTargetModal" onclick="if(event.target===this)closeShareTargetModal()">
   <div class="modal-box">
     <div class="modal-box-head">
@@ -877,7 +849,6 @@
     </div>
     <div class="modal-body">
 
-      <!-- Status tự detect -->
       <div class="share-status-box" id="shareStatusBox">
         <span class="share-status-icon" id="shareStatusIcon">⏳</span>
         <div class="share-status-text">
@@ -928,7 +899,7 @@
   </div>
 </div>
 
-<!-- ============ v50.11.0: SPX-H FILTER PANEL (BOTTOM SHEET) ============ -->
+<!-- ============ HISTORY FILTER PANEL ============ -->
 <div class="modal-shade filter-panel-shade" id="historyFilterPanel" onclick="if(event.target===this)closeHistoryFilterPanel()">
   <div class="filter-panel-box">
     <div class="filter-panel-head">
@@ -943,7 +914,6 @@
 
     <div class="filter-panel-body">
 
-      <!-- Section 1: Thời gian -->
       <div class="filter-section">
         <div class="filter-section-title">📅 Thời gian</div>
         <div class="filter-range-row">
@@ -959,7 +929,6 @@
         </div>
       </div>
 
-      <!-- Section 2: Loại đơn -->
       <div class="filter-section">
         <div class="filter-section-title">📦 Loại đơn</div>
         <div class="filter-chip-row" id="filterTypeChips">
@@ -969,7 +938,6 @@
         </div>
       </div>
 
-      <!-- Section 3: SL đơn -->
       <div class="filter-section">
         <div class="filter-section-title">🔢 Số lượng đơn</div>
         <div class="filter-range-row">
@@ -985,7 +953,6 @@
         </div>
       </div>
 
-      <!-- Section 4: Điểm -->
       <div class="filter-section">
         <div class="filter-section-title">🎯 Trạng thái điểm</div>
         <div class="filter-chip-row" id="filterScoreChips">
