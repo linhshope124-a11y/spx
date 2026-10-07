@@ -1,4 +1,4 @@
-const CACHE = 'spx-tracker-v552';
+const CACHE = 'spx-tracker-v553';
 const SHARE_CACHE = 'spx-shared-files';
 
 const CORE = [
