@@ -16,16 +16,14 @@ import {
   toggleThemeFromMenu,
   initPeriodLabelLongPress,
   toggleOcrDebugText,
-  // v50.11.0: SPX-F
   openShareTargetModal, closeShareTargetModal,
-  // v50.11.0: SPX-H filter panel
   openHistoryFilterPanel, closeHistoryFilterPanel,
   quickPickDateRange, quickPickOrders,
   toggleFilterType, pickFilterScore,
   resetHistoryFilterPanel, applyHistoryFilterPanel,
   clearAllHistoryFilters,
-  // v50.11.8: all opportunities modal
-  openAllOpportunitiesModal, closeAllOpportunitiesModal
+  openAllOpportunitiesModal, closeAllOpportunitiesModal,
+  showToast
 } from './ui.js';
 import {
   handleOcrImage, preloadTesseractWorker,
@@ -34,7 +32,6 @@ import {
   saveBatchAll, importBatchItem, removeBatchItem,
   backToBatch, hasBatchPending, showBackToBatchBtn,
   clearOcrCache, getOcrCacheStats,
-  // v50.11.0: SPX-F
   handleSharedImage
 } from './ocr.js';
 import { saveRecord, deleteRecord, clearAllHistory } from './entry.js';
@@ -44,7 +41,6 @@ import {
 } from './backup.js';
 import {
   updateAllViews, renderReminderBanner, dismissReminderBanner,
-  // v50.11.8
   setAllOppFilter
 } from './render.js';
 import {
@@ -224,17 +220,29 @@ async function registerSW() {
   }
 }
 
-async function checkVersion() {
+/**
+ * v50.11.10: Kiểm tra version từ server.
+ * @param {boolean} manual - true nếu user bấm menu "Kiểm tra cập nhật"
+ *   → hiện toast phản hồi (có bản mới / đã mới nhất / lỗi mạng)
+ */
+async function checkVersion(manual = false) {
   try {
     const res = await fetch(`./version.json?t=${Date.now()}`, { cache: 'no-store' });
-    if (!res.ok) return;
+    if (!res.ok) {
+      if (manual) showToast('⚠️ Không kiểm tra được — thử lại sau', 'warning', 2500);
+      return;
+    }
     const data = await res.json();
     const serverVersion = data.version;
-    if (!serverVersion) return;
+    if (!serverVersion) {
+      if (manual) showToast('⚠️ Không đọc được version', 'warning', 2500);
+      return;
+    }
 
     if (!currentAppVersion) {
       currentAppVersion = serverVersion;
       console.log('[Update] Current version:', serverVersion);
+      if (manual) showToast(`ℹ️ Bản hiện tại: ${serverVersion}`, 'info', 2500);
       return;
     }
 
@@ -247,9 +255,12 @@ async function checkVersion() {
         waitingWorker = swRegistration.waiting;
       }
       showUpdateBanner(serverVersion);
+      if (manual) showToast(`🎉 Có bản mới ${serverVersion}!`, 'success', 2500);
+    } else if (manual) {
+      showToast(`✅ Đã là bản mới nhất (${serverVersion})`, 'success', 2500);
     }
   } catch (e) {
-    // Bỏ qua lỗi mạng
+    if (manual) showToast('⚠️ Không kiểm tra được — kiểm tra mạng', 'warning', 2500);
   }
 }
 
@@ -414,7 +425,7 @@ Object.assign(window, {
   syncRankUIForCurrentMonth,
 
   applyUpdate,
-  checkVersion,
+  checkVersion: () => checkVersion(true),   // menu gọi → manual mode
 
   setPeriodMode,
   periodPrev,
@@ -430,12 +441,10 @@ Object.assign(window, {
   updateOcrCacheStats: _updateOcrCacheStats,
   dismissReminderBanner,
 
-  // v50.11.0: SPX-F Share Target
   openShareTargetModal,
   closeShareTargetModal,
   handleSharedImage,
 
-  // v50.11.0: SPX-H Filter panel
   openHistoryFilterPanel,
   closeHistoryFilterPanel,
   quickPickDateRange,
@@ -446,12 +455,11 @@ Object.assign(window, {
   applyHistoryFilterPanel,
   clearAllHistoryFilters,
 
-  // v50.11.8: All opportunities modal
   openAllOpportunitiesModal,
   closeAllOpportunitiesModal,
   setAllOppFilter,
 
-  // REGION — inline onclick
+  // REGION
   changeRegion: function(regionKey, el) {
     try {
       console.log('[Region] change →', regionKey);
@@ -554,8 +562,8 @@ window.openSettingsModal = function() {
   setTimeout(() => preloadTesseractWorker(), 2000);
 
   registerSW();
-  setTimeout(checkVersion, 2000);
-  setInterval(checkVersion, 5 * 60 * 1000);
+  setTimeout(() => checkVersion(false), 2000);
+  setInterval(() => checkVersion(false), 5 * 60 * 1000);
 
   _runShareTargetIfNeeded();
 })();
