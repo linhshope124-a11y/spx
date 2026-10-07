@@ -1,5 +1,5 @@
 // =============================================================
-// OCR ENGINE v2.6 — PART 1/3
+// OCR ENGINE v2.7 — PART 1/3
 // Config · AbortController · Worker · Cache
 // =============================================================
 
@@ -22,8 +22,6 @@ const LS_CACHE_MAX_BYTES = 4 * 1024 * 1024;
 const SCORE_AUTO_SAVE = 92;
 const SCORE_REVIEW    = 85;
 const SCORE_MAX_CHECKSUM_FAIL = 84;
-
-// ⚠️ v50.11.5: Xóa SPX_RANGES (dead code) — RANGE_KEY_BY_MIN thay thế
 
 const RANGE_KEY_BY_MIN = {
   0: '0_2',   2: '2_4',    4: '4_6',    6: '6_8',
@@ -181,7 +179,7 @@ async function ocrRecognize(preprocessedDataUrl, signal) {
   }
 }
 
-// ==================== HASH BLOB (v50.11.5: SHA-256) ====================
+// ==================== HASH BLOB (SHA-256) ====================
 async function hashBlob(file) {
   try {
     const buf = await file.arrayBuffer();
@@ -389,7 +387,7 @@ export function getOcrCacheStats() {
   };
 }
 // =============================================================
-// OCR ENGINE v2.6 — PART 2/3
+// OCR ENGINE v2.7 — PART 2/3
 // Image · Preprocess · Parser · Validation · Scoring
 // =============================================================
 
@@ -432,7 +430,7 @@ function makeThumbnail(dataUrl, maxW = 96) {
   });
 }
 
-// ==================== DETECT ACTIVE TAB (v2.5 — FIX zone cho gạch cam) ====================
+// ==================== DETECT ACTIVE TAB ====================
 const TAB_MIN_CONFIDENCE = 60;
 
 const FALLBACK_ZONES = [
@@ -453,7 +451,6 @@ function detectActiveTab(imageSource) {
         const ctx = canvas.getContext('2d', { willReadFrequently: true });
         ctx.drawImage(img, 0, 0);
 
-        // ===== 1. TÌM 3 TAB TEXT trong line tab bar =====
         const tabY1 = Math.floor(img.height * 0.09);
         const tabY2 = Math.floor(img.height * 0.145);
         const tabH  = Math.max(1, tabY2 - tabY1);
@@ -498,7 +495,6 @@ function detectActiveTab(imageSource) {
 
         const tabCandidates = merged.filter(c => (c.end - c.start) >= 30);
 
-        // ===== 2. TÌM GẠCH CAM =====
         const camY1 = Math.floor(img.height * 0.12);
         const camY2 = Math.floor(img.height * 0.18);
         const camH  = Math.max(1, camY2 - camY1);
@@ -543,7 +539,6 @@ function detectActiveTab(imageSource) {
           if (sum > maxSum) { maxSum = sum; bestCenter = x; }
         }
 
-        // ===== 3. MATCH gạch cam với 3 tab =====
         if (tabCandidates.length >= 3) {
           const sorted = [...tabCandidates]
             .sort((a, b) => (b.end - b.start) - (a.end - a.start))
@@ -598,7 +593,6 @@ function detectActiveTab(imageSource) {
           }
         }
 
-        // ===== FALLBACK: dùng zone cố định =====
         const rel = bestCenter / img.width;
         let fallbackType = null;
         for (const z of FALLBACK_ZONES) {
@@ -773,16 +767,76 @@ async function preprocessPass3(rawDataUrl, fixedThreshold, signal) {
 }
 
 // ==================== PARSE ====================
+
+/**
+ * v2.7 — TẦNG 2: Fix chữ cái lẫn trong dải khối lượng.
+ *
+ * Match pattern: X.XXX - Y.YYY (cho phép chữ trong số)
+ * Fix:
+ *   O, o, Q → 0
+ *   Z, z    → 2
+ *   S, s    → 5
+ *   G       → 6
+ *   B       → 8
+ *   l, I, | → 1
+ *
+ * VD:
+ *   "O.OOO - 2.OO1"  → "0.000 - 2.001"
+ *   "Z.OO1 - 4.OO1"  → "2.001 - 4.001"
+ *   "4.00l - 6.00I"  → "4.001 - 6.001"
+ */
+function fixWeightRanges(text) {
+  const RANGE_CHAR = '[0-9OoQlI|ZzSsGB]';
+  const pattern = new RegExp(
+    `(${RANGE_CHAR})\\s*([.,])\\s*(${RANGE_CHAR})(${RANGE_CHAR})(${RANGE_CHAR})` +
+    `\\s*[-–—]\\s*` +
+    `(${RANGE_CHAR})\\s*([.,])\\s*(${RANGE_CHAR})(${RANGE_CHAR})(${RANGE_CHAR})`,
+    'g'
+  );
+
+  const fixChar = (c) => {
+    switch (c) {
+      case 'O': case 'o': case 'Q': return '0';
+      case 'l': case 'I': case '|': return '1';
+      case 'Z': case 'z': return '2';
+      case 'S': case 's': return '5';
+      case 'G': return '6';
+      case 'B': return '8';
+      default:  return c;
+    }
+  };
+
+  const fixGroup = (str) => str.split('').map(fixChar).join('');
+
+  return text.replace(pattern, (match, a, dot1, b, c, d, e, dot2, f, g, h) => {
+    const left  = `${fixChar(a)}.${fixGroup(b + c + d)}`;
+    const right = `${fixChar(e)}.${fixGroup(f + g + h)}`;
+    return `${left} - ${right}`;
+  });
+}
+
 function normalizeOcrText(text) {
-  return text
+  return fixWeightRanges(text)                    // v2.7 TẦNG 2 — fix dải TRƯỚC
     .replace(/[–—−]/g, '-')
     .replace(/(\d),(\d)/g, '$1.$2')
     .replace(/¡/g, '1')
     .replace(/\bO(\d)/g, '0$1')
     .replace(/(\d)O\b/g, '$10')
 
+    // OCR đọc "1" thành Ì/Í/I/l/| trước "Đơn hàng"
     .replace(/(Ì|Í|I|l|\|)(\s*)(?=Đơn\s*hàng)/gi, '1$2')
 
+    // ⭐ v2.7 TẦNG 1 — Fix 8 case chữ cái → số trước "Đơn hàng"
+    .replace(/([Zz])(\s*)(?=Đơn\s*hàng)/g, '2$2')     // Z/z → 2
+    .replace(/([Ss])(\s*)(?=Đơn\s*hàng)/g, '5$2')     // S/s → 5
+    .replace(/([OoQ])(\s*)(?=Đơn\s*hàng)/g, '0$2')    // O/o/Q → 0
+    .replace(/([G])(\s*)(?=Đơn\s*hàng)/g, '6$2')      // G → 6
+    .replace(/([gq])(\s*)(?=Đơn\s*hàng)/g, '9$2')     // g/q → 9
+    .replace(/([Bb])(\s*)(?=Đơn\s*hàng)/g, '8$2')     // B/b → 8
+    .replace(/([AH])(\s*)(?=Đơn\s*hàng)/g, '4$2')     // A/H → 4
+    .replace(/([T])(\s*)(?=Đơn\s*hàng)/g, '7$2')      // T → 7
+
+    // Bắt biến thể "Đơn hàng"
     .replace(/[đĐ][ơơọo]n\s*h[àaàáạảãêềếệểễ]ng?/gi, 'Đơn hàng')
     .replace(/[đĐ][ơơọo]n\s*h[ềếệểễ]\b/gi, 'Đơn hàng')
     .replace(/[đĐ][ơơọo]n\s*h\b/gi, 'Đơn hàng')
@@ -1116,7 +1170,7 @@ function getTypeLabel(r) {
        : 'Hoàn';
 }
 // =============================================================
-// OCR ENGINE v2.6 — PART 3/3
+// OCR ENGINE v2.7 — PART 3/3
 // Pipeline · Routing · Modals · Batch · Exports
 // =============================================================
 
