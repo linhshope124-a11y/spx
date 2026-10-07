@@ -201,7 +201,7 @@ body {
   <section class="g-hero">
     <div class="g-hero-title">SPX Tracker</div>
     <div class="g-hero-sub">Theo dõi sản lượng & tính điểm phúc lợi SPX Express</div>
-    <span class="g-hero-version">v50.11.4</span>
+    <span class="g-hero-version">v50.12.0</span>
   </section>
 
   <nav class="g-toc">
@@ -269,7 +269,7 @@ body {
     <h3 class="g-h3">✅ Bước 3 — Kết quả</h3>
     <ul class="g-list">
       <li>App <b>tự nhận diện tab</b> (Giao / Lấy / Hoàn) — không cần chọn tay</li>
-      <li>Score ≥92 + checksum khớp → <b>tự lưu</b> ✅</li>
+      <li>Nếu checksum khớp → <b>tự lưu</b> ✅</li>
       <li>Fail hoặc cần check → hiện modal đối chiếu ảnh gốc</li>
     </ul>
 
@@ -283,6 +283,9 @@ body {
       <span class="g-note-title">📚 Quét nhiều ảnh cùng lúc</span>
       Chọn nhiều ảnh → app xử lý tuần tự → ảnh nào pass tự lưu → ảnh cần check vào <b>danh sách Batch</b> để xử lý riêng.
     </div>
+
+    <h3 class="g-h3">🐛 Debug — Khi OCR đọc sai</h3>
+    <p class="g-p">Modal Nhập sản lượng có nút <b>"Xem log"</b> + <b>"📋 Copy log"</b> — giúp copy text OCR thô để báo lỗi cho tác giả.</p>
   </section>
 
   <!-- ============ 3. LƯƠNG + RULE TÀI XẾ ============ -->
@@ -324,8 +327,8 @@ Ngày tối đa:
 
 Số công = đếm ngày có:
   Giao + (Lấy / 6) + Hoàn ≥ ngưỡng
-  • Miền:   ≥60 = 1 công, ≥30 = 0.5 công
-  • HCM/HN: ≥80 = 1 công, ≥40 = 0.5 công
+  • Miền Trung:  ≥60 = 1 công, ≥30 = 0.5 công
+  • HCM/HN:      ≥80 = 1 công, ≥40 = 0.5 công
 
 Tích lũy = Lương 1 công × số công</pre>
 
@@ -419,9 +422,10 @@ VD: Gốc 1.100, hạng Vàng (+20%)
 
     <h3 class="g-h3">🐛 OCR đọc sai số</h3>
     <p class="g-p">Chụp lại ảnh <b>rõ nét hơn</b> (đủ sáng, không rung). Nếu vẫn sai → mở modal → sửa tay số bị sai → Lưu.</p>
+    <p class="g-p">Muốn báo lỗi → bấm <b>"Xem log"</b> → <b>"📋 Copy log"</b> → gửi tác giả.</p>
 
     <h3 class="g-h3">🎯 Không nhận diện được tab</h3>
-    <p class="g-p">App hiện modal <b>"Chọn loại đơn"</b>. Chọn <b>Giao / Lấy / Hoàn</b> thủ công (1 lần/ảnh). Ảnh tiếp theo nếu rõ sẽ tự nhận.</p>
+    <p class="g-p">Chụp lại ảnh có <b>đủ 3 tab</b> (Đã giao hàng / Đã lấy / Đã trả hàng) ở đầu màn hình.</p>
 
     <h3 class="g-h3">🔄 App không cập nhật bản mới</h3>
     <ol class="g-olist">
@@ -438,11 +442,15 @@ VD: Gốc 1.100, hạng Vàng (+20%)
 
     <h3 class="g-h3">📷 Không thấy nút quét</h3>
     <p class="g-p">Đóng app hoàn toàn → mở lại.</p>
+
+    <h3 class="g-h3">⏱️ OCR chạy lâu</h3>
+    <p class="g-p">Lần đầu ~15-20s (tải engine). Sau đó cache lại, lần sau ~5s.</p>
+    <p class="g-p">Nếu quét nhiều ảnh → bấm <b>Hủy</b> trong overlay để dừng.</p>
   </section>
 
   <footer class="g-footer">
     <div class="g-footer-text">
-      <b>SPX Tracker v50.11.4</b><br>
+      <b>SPX Tracker v50.12.0</b><br>
       Made with ❤️ for SPX drivers
     </div>
     <a href="./index.html" class="g-footer-btn">
