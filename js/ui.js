@@ -2,10 +2,7 @@ import { state, persistSettings, persistPeriodState, getRankConfig, setRankConfi
 import {
   updateAllViews, renderHistory,
   getHistFilters, setHistFilters, resetHistFilters,
-  hasActiveHistFilters, countActiveHistFilters,
-  // v50.9.0 backward compat
-  setHistDateFilter, getHistDateFilter,
-  // v50.11.8: modal all opportunities
+  hasActiveHistFilters,
   renderAllOpportunitiesList
 } from './render.js';
 import { getTodayIso, getCurrentMonthIso, formatDateDisplay } from './utils.js';
@@ -13,24 +10,10 @@ import { toggleTheme } from './theme.js';
 import { showConfirm } from './dialog.js';
 
 // ================ HELPERS ================
-function formatDateLabel(isoDate) {
-  if (!isoDate || !/^\d{4}-\d{2}-\d{2}$/.test(isoDate)) return '';
-  const [y, m, d] = isoDate.split('-');
-  const dt = new Date(isoDate + 'T00:00:00');
-  const wd = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'][dt.getDay()];
-  return `${wd}, ${d}/${m}/${y}`;
-}
-
 function formatMonthLabelShort(isoMonth) {
   if (!isoMonth || !/^\d{4}-\d{2}$/.test(isoMonth)) return '';
   const [y, m] = isoMonth.split('-');
   return `Tháng ${parseInt(m, 10)}/${y}`;
-}
-
-function _shiftDateIso(isoDate, days) {
-  const d = new Date(isoDate + 'T00:00:00');
-  d.setDate(d.getDate() + days);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 // ================ TABS ================
@@ -61,11 +44,12 @@ function _resetHistoryView() {
   state.histFilter = 'all';
   resetHistFilters();
   document.querySelectorAll('#tab-history .filter-bar .filter-btn').forEach(b => {
-    if (b.classList.contains('filter-btn-search')) return;
     if (b.classList.contains('filter-btn-date')) return;
     const isAllBtn = b.textContent.trim() === 'Tất cả';
     b.classList.toggle('active', isAllBtn);
   });
+  const dateBtn = document.getElementById('histFilterDateBtn');
+  if (dateBtn) dateBtn.classList.remove('active');
   renderHistory();
 }
 
@@ -82,27 +66,20 @@ export function switchModalSubTab(tabKey) {
   if (pane) pane.style.display = 'block';
 }
 
-// ================ OVERVIEW FILTER (deprecated v50.11.8) ================
+// ================ OVERVIEW FILTER (deprecated) ================
 /**
- * v50.11.8: KHÔNG CÒN DÙNG — card "Cơ hội tăng điểm" giờ hiện top 4 gộp 3 loại.
- * Giữ function này để tránh vỡ import từ main.js. Không làm gì cả.
- * @deprecated
+ * @deprecated — Card "Cơ hội tăng điểm" hiện top 4 gộp 3 loại.
+ * Giữ function này để tránh vỡ import từ main.js.
  */
 export function setOverviewFilter(filter, el) {
-  // No-op — không còn filter ở card chính
   console.warn('[ui] setOverviewFilter không còn dùng (v50.11.8)');
 }
 
-// ================ ALL OPPORTUNITIES MODAL (v50.11.8) ================
-/**
- * Mở modal "Xem tất cả cơ hội tăng điểm"
- * Mặc định filter "Giao" — có thể đổi qua filter-bar trong modal
- */
+// ================ ALL OPPORTUNITIES MODAL ================
 export function openAllOpportunitiesModal() {
   const modal = document.getElementById('allOpportunitiesModal');
   if (!modal) return;
 
-  // Reset filter về "Giao" mỗi lần mở
   const bar = modal.querySelector('.filter-bar');
   if (bar) {
     bar.querySelectorAll('.filter-btn').forEach(b => {
@@ -110,13 +87,10 @@ export function openAllOpportunitiesModal() {
     });
   }
 
-  // Set filter state = 'del' + render
   if (typeof window.setAllOppFilter === 'function') {
-    // window.setAllOppFilter export từ main.js
     const firstBtn = bar?.querySelector('.filter-btn');
     window.setAllOppFilter('del', firstBtn);
   } else {
-    // fallback: gọi trực tiếp render
     renderAllOpportunitiesList();
   }
 
@@ -128,7 +102,7 @@ export function closeAllOpportunitiesModal() {
   if (modal) modal.classList.remove('active');
 }
 
-// ================ HISTORY FILTER (SPX-H) ================
+// ================ HISTORY FILTER — 4 nút cũ ================
 export function setHistFilter(filter, btn) {
   state.histFilter = filter;
 
@@ -142,249 +116,60 @@ export function setHistFilter(filter, btn) {
   const bar = btn.closest('.filter-bar');
   if (bar) {
     bar.querySelectorAll('.filter-btn').forEach(b => {
-      if (b.classList.contains('filter-btn-search')) return;
       if (b.classList.contains('filter-btn-date')) return;
       b.classList.remove('active');
     });
   }
   btn.classList.add('active');
 
-  document.querySelectorAll('#filterTypeChips .filter-toggle-chip').forEach(b => {
-    b.classList.toggle('active', types[b.dataset.filterType] === true);
-  });
-
   renderHistory();
 }
 
-export function openHistoryFilterPanel() {
-  _bindFilterPanelInputs();
-  _fillFilterPanelFromState();
-  document.getElementById('historyFilterPanel').classList.add('active');
-}
+// ================ HISTORY FILTER — nút Ngày (v50.11.11) ================
+/**
+ * Mở date picker native → user chọn 1 ngày
+ */
+export function openHistoryDatePicker() {
+  const input = document.getElementById('historyDatePickerInput');
+  if (!input) return;
 
-export function closeHistoryFilterPanel() {
-  document.getElementById('historyFilterPanel').classList.remove('active');
-}
-
-function _fillFilterPanelFromState() {
   const f = getHistFilters();
 
-  const fromEl = document.getElementById('filterDateFrom');
-  const toEl   = document.getElementById('filterDateTo');
-  const minEl  = document.getElementById('filterMinOrders');
-  const maxEl  = document.getElementById('filterMaxOrders');
-
-  if (fromEl) fromEl.value = f.dateFrom || '';
-  if (toEl)   toEl.value   = f.dateTo   || '';
-  if (minEl)  minEl.value  = f.minOrders != null ? f.minOrders : '';
-  if (maxEl)  maxEl.value  = f.maxOrders != null ? f.maxOrders : '';
-
-  document.querySelectorAll('#filterTypeChips .filter-toggle-chip').forEach(b => {
-    b.classList.toggle('active', f.types[b.dataset.filterType] === true);
-  });
-
-  document.querySelectorAll('#filterScoreChips .filter-radio-chip').forEach(b => {
-    b.classList.toggle('active', b.dataset.score === f.scoreFilter);
-  });
-
-  document.querySelectorAll('.filter-quick-btn[data-range]').forEach(b => b.classList.remove('active'));
-
-  _updateApplyBtnLabel();
-}
-
-function _bindFilterPanelInputs() {
-  ['filterDateFrom', 'filterDateTo', 'filterMinOrders', 'filterMaxOrders'].forEach(id => {
-    const el = document.getElementById(id);
-    if (!el || el.dataset.bound === '1') return;
-    el.dataset.bound = '1';
-    el.addEventListener('input', _updateApplyBtnLabel);
-    el.addEventListener('change', _updateApplyBtnLabel);
-  });
-}
-
-function _countFiltersInPanel() {
-  let n = 0;
-
-  const fromEl = document.getElementById('filterDateFrom');
-  const toEl   = document.getElementById('filterDateTo');
-  if ((fromEl && fromEl.value) || (toEl && toEl.value)) n++;
-
-  const activeTypeCount = document.querySelectorAll('#filterTypeChips .filter-toggle-chip.active').length;
-  if (activeTypeCount < 3) n++;
-
-  const minEl = document.getElementById('filterMinOrders');
-  const maxEl = document.getElementById('filterMaxOrders');
-  if ((minEl && minEl.value !== '') || (maxEl && maxEl.value !== '')) n++;
-
-  const scoreActive = document.querySelector('#filterScoreChips .filter-radio-chip.active');
-  if (scoreActive && scoreActive.dataset.score !== 'all') n++;
-
-  return n;
-}
-
-function _updateApplyBtnLabel() {
-  const btn = document.getElementById('applyFilterBtn');
-  if (!btn) return;
-  const n = _countFiltersInPanel();
-  btn.innerText = n > 0 ? `✨ Áp dụng (${n})` : '✨ Áp dụng';
-}
-
-export function quickPickDateRange(range, btn) {
-  const today = getTodayIso();
-  let from = null, to = today;
-
-  if (range === 'today') {
-    from = today;
-  } else if (range === '7d') {
-    from = _shiftDateIso(today, -6);
-  } else if (range === '30d') {
-    from = _shiftDateIso(today, -29);
-  } else if (range === 'month') {
-    const now = new Date();
-    const y = now.getFullYear();
-    const m = String(now.getMonth() + 1).padStart(2, '0');
-    from = `${y}-${m}-01`;
+  // Nếu đang có ngày → bấm lần nữa = clear
+  if (f.date) {
+    clearHistoryDateFilter();
+    return;
   }
 
-  const fromEl = document.getElementById('filterDateFrom');
-  const toEl   = document.getElementById('filterDateTo');
-  if (fromEl) fromEl.value = from || '';
-  if (toEl)   toEl.value   = to || '';
+  // Set default = today hoặc ngày đầu tiên của tháng đang xem
+  const today = getTodayIso();
+  const cm = state.currentMonth || getCurrentMonthIso();
+  const defaultDate = today.startsWith(cm) ? today : `${cm}-01`;
+  input.value = defaultDate;
 
-  const dateRanges = ['today', '7d', '30d', 'month'];
-  document.querySelectorAll('.filter-quick-btn[data-range]').forEach(b => {
-    if (dateRanges.includes(b.dataset.range)) {
-      b.classList.toggle('active', b === btn);
-    }
-  });
-
-  _updateApplyBtnLabel();
+  if (typeof input.showPicker === 'function') {
+    try { input.showPicker(); } catch { input.click(); }
+  } else {
+    input.click();
+  }
 }
 
-export function quickPickOrders(range, btn) {
-  const minEl = document.getElementById('filterMinOrders');
-  const maxEl = document.getElementById('filterMaxOrders');
+/**
+ * Callback khi user chọn ngày trong date picker
+ */
+export function applyHistoryDateFilter(value) {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return;
 
-  let min = null, max = null;
-  if (range === 'lt50')         { min = null; max = 49; }
-  else if (range === '50-100')  { min = 50;   max = 100; }
-  else if (range === '100-200') { min = 100;  max = 200; }
-  else if (range === 'gt200')   { min = 201;  max = null; }
-
-  if (minEl) minEl.value = min != null ? min : '';
-  if (maxEl) maxEl.value = max != null ? max : '';
-
-  const ordersRanges = ['lt50', '50-100', '100-200', 'gt200'];
-  document.querySelectorAll('.filter-quick-btn[data-range]').forEach(b => {
-    if (ordersRanges.includes(b.dataset.range)) {
-      b.classList.toggle('active', b === btn);
-    }
-  });
-
-  _updateApplyBtnLabel();
-}
-
-export function toggleFilterType(btn) {
-  if (!btn) return;
-  btn.classList.toggle('active');
-  _updateApplyBtnLabel();
-}
-
-export function pickFilterScore(score, btn) {
-  document.querySelectorAll('#filterScoreChips .filter-radio-chip').forEach(b => b.classList.remove('active'));
-  if (btn) btn.classList.add('active');
-  _updateApplyBtnLabel();
-}
-
-export function resetHistoryFilterPanel() {
-  const fromEl = document.getElementById('filterDateFrom');
-  const toEl   = document.getElementById('filterDateTo');
-  const minEl  = document.getElementById('filterMinOrders');
-  const maxEl  = document.getElementById('filterMaxOrders');
-
-  if (fromEl) fromEl.value = '';
-  if (toEl)   toEl.value   = '';
-  if (minEl)  minEl.value  = '';
-  if (maxEl)  maxEl.value  = '';
-
-  document.querySelectorAll('#filterTypeChips .filter-toggle-chip').forEach(b => b.classList.add('active'));
-  document.querySelectorAll('#filterScoreChips .filter-radio-chip').forEach(b => {
-    b.classList.toggle('active', b.dataset.score === 'all');
-  });
-  document.querySelectorAll('.filter-quick-btn[data-range]').forEach(b => b.classList.remove('active'));
-
-  _updateApplyBtnLabel();
-}
-
-export function applyHistoryFilterPanel() {
-  const fromEl = document.getElementById('filterDateFrom');
-  const toEl   = document.getElementById('filterDateTo');
-  const minEl  = document.getElementById('filterMinOrders');
-  const maxEl  = document.getElementById('filterMaxOrders');
-
-  const types = { delivery: false, pickup: false, return: false };
-  document.querySelectorAll('#filterTypeChips .filter-toggle-chip.active').forEach(b => {
-    types[b.dataset.filterType] = true;
-  });
-
-  const scoreActive = document.querySelector('#filterScoreChips .filter-radio-chip.active');
-  const score = scoreActive ? scoreActive.dataset.score : 'all';
-
-  setHistFilters({
-    dateFrom: (fromEl && fromEl.value) ? fromEl.value : null,
-    dateTo:   (toEl   && toEl.value)   ? toEl.value   : null,
-    types,
-    minOrders: (minEl && minEl.value !== '') ? Number(minEl.value) : null,
-    maxOrders: (maxEl && maxEl.value !== '') ? Number(maxEl.value) : null,
-    scoreFilter: score
-  });
-
-  _syncFilterBarFromTypes(types);
-
-  renderHistory();
-  closeHistoryFilterPanel();
-}
-
-export function clearAllHistoryFilters() {
-  resetHistFilters();
-  state.histFilter = 'all';
-
-  document.querySelectorAll('#tab-history .filter-bar .filter-btn').forEach(b => {
-    if (b.classList.contains('filter-btn-search')) return;
-    if (b.classList.contains('filter-btn-date')) return;
-    const isAllBtn = b.textContent.trim() === 'Tất cả';
-    b.classList.toggle('active', isAllBtn);
-  });
-
+  setHistFilters({ date: value });
   renderHistory();
 }
 
-function _syncFilterBarFromTypes(types) {
-  const btns = document.querySelectorAll('#tab-history .filter-bar .filter-btn');
-  const onlyOne = (types.delivery && !types.pickup && !types.return) ? 'Giao'
-                : (!types.delivery && types.pickup && !types.return) ? 'Lấy'
-                : (!types.delivery && !types.pickup && types.return) ? 'Hoàn'
-                : null;
-
-  btns.forEach(b => {
-    if (b.classList.contains('filter-btn-search')) return;
-    if (b.classList.contains('filter-btn-date')) return;
-    const txt = b.textContent.trim();
-    if (onlyOne) {
-      b.classList.toggle('active', txt === onlyOne);
-    } else {
-      b.classList.toggle('active', txt === 'Tất cả');
-    }
-  });
-}
-
-// ---- Backward compat v50.9.0 ----
-export function openHistoryDatePicker() {
-  openHistoryFilterPanel();
-}
-export function applyHistoryDateFilter(value) {}
+/**
+ * Clear filter ngày → về list theo tháng
+ */
 export function clearHistoryDateFilter() {
-  clearAllHistoryFilters();
+  setHistFilters({ date: null });
+  renderHistory();
 }
 
 // ================ PERIOD BAR ================
