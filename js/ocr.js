@@ -1,5 +1,5 @@
 // =============================================================
-// OCR ENGINE v2.7 — PART 1/3
+// OCR ENGINE v2.8 — PART 1/3
 // Config · AbortController · Worker · Cache
 // =============================================================
 
@@ -179,7 +179,7 @@ async function ocrRecognize(preprocessedDataUrl, signal) {
   }
 }
 
-// ==================== HASH BLOB (SHA-256) ====================
+// ==================== HASH BLOB ====================
 async function hashBlob(file) {
   try {
     const buf = await file.arrayBuffer();
@@ -387,7 +387,7 @@ export function getOcrCacheStats() {
   };
 }
 // =============================================================
-// OCR ENGINE v2.7 — PART 2/3
+// OCR ENGINE v2.8 — PART 2/3
 // Image · Preprocess · Parser · Validation · Scoring
 // =============================================================
 
@@ -769,21 +769,7 @@ async function preprocessPass3(rawDataUrl, fixedThreshold, signal) {
 // ==================== PARSE ====================
 
 /**
- * v2.7 — TẦNG 2: Fix chữ cái lẫn trong dải khối lượng.
- *
- * Match pattern: X.XXX - Y.YYY (cho phép chữ trong số)
- * Fix:
- *   O, o, Q → 0
- *   Z, z    → 2
- *   S, s    → 5
- *   G       → 6
- *   B       → 8
- *   l, I, | → 1
- *
- * VD:
- *   "O.OOO - 2.OO1"  → "0.000 - 2.001"
- *   "Z.OO1 - 4.OO1"  → "2.001 - 4.001"
- *   "4.00l - 6.00I"  → "4.001 - 6.001"
+ * TẦNG 2: Fix chữ cái lẫn trong dải khối lượng.
  */
 function fixWeightRanges(text) {
   const RANGE_CHAR = '[0-9OoQlI|ZzSsGB]';
@@ -816,27 +802,25 @@ function fixWeightRanges(text) {
 }
 
 function normalizeOcrText(text) {
-  return fixWeightRanges(text)                    // v2.7 TẦNG 2 — fix dải TRƯỚC
+  return fixWeightRanges(text)
     .replace(/[–—−]/g, '-')
     .replace(/(\d),(\d)/g, '$1.$2')
     .replace(/¡/g, '1')
     .replace(/\bO(\d)/g, '0$1')
     .replace(/(\d)O\b/g, '$10')
 
-    // OCR đọc "1" thành Ì/Í/I/l/| trước "Đơn hàng"
     .replace(/(Ì|Í|I|l|\|)(\s*)(?=Đơn\s*hàng)/gi, '1$2')
 
-    // ⭐ v2.7 TẦNG 1 — Fix 8 case chữ cái → số trước "Đơn hàng"
-    .replace(/([Zz])(\s*)(?=Đơn\s*hàng)/g, '2$2')     // Z/z → 2
-    .replace(/([Ss])(\s*)(?=Đơn\s*hàng)/g, '5$2')     // S/s → 5
-    .replace(/([OoQ])(\s*)(?=Đơn\s*hàng)/g, '0$2')    // O/o/Q → 0
-    .replace(/([G])(\s*)(?=Đơn\s*hàng)/g, '6$2')      // G → 6
-    .replace(/([gq])(\s*)(?=Đơn\s*hàng)/g, '9$2')     // g/q → 9
-    .replace(/([Bb])(\s*)(?=Đơn\s*hàng)/g, '8$2')     // B/b → 8
-    .replace(/([AH])(\s*)(?=Đơn\s*hàng)/g, '4$2')     // A/H → 4
-    .replace(/([T])(\s*)(?=Đơn\s*hàng)/g, '7$2')      // T → 7
+    // TẦNG 1 — Fix 8 case chữ cái → số trước "Đơn hàng"
+    .replace(/([Zz])(\s*)(?=Đơn\s*hàng)/g, '2$2')
+    .replace(/([Ss])(\s*)(?=Đơn\s*hàng)/g, '5$2')
+    .replace(/([OoQ])(\s*)(?=Đơn\s*hàng)/g, '0$2')
+    .replace(/([G])(\s*)(?=Đơn\s*hàng)/g, '6$2')
+    .replace(/([gq])(\s*)(?=Đơn\s*hàng)/g, '9$2')
+    .replace(/([Bb])(\s*)(?=Đơn\s*hàng)/g, '8$2')
+    .replace(/([AH])(\s*)(?=Đơn\s*hàng)/g, '4$2')
+    .replace(/([T])(\s*)(?=Đơn\s*hàng)/g, '7$2')
 
-    // Bắt biến thể "Đơn hàng"
     .replace(/[đĐ][ơơọo]n\s*h[àaàáạảãêềếệểễ]ng?/gi, 'Đơn hàng')
     .replace(/[đĐ][ơơọo]n\s*h[ềếệểễ]\b/gi, 'Đơn hàng')
     .replace(/[đĐ][ơơọo]n\s*h\b/gi, 'Đơn hàng')
@@ -1170,7 +1154,7 @@ function getTypeLabel(r) {
        : 'Hoàn';
 }
 // =============================================================
-// OCR ENGINE v2.7 — PART 3/3
+// OCR ENGINE v2.8 — PART 3/3
 // Pipeline · Routing · Modals · Batch · Exports
 // =============================================================
 
@@ -1308,8 +1292,11 @@ async function processOneFile(file, signal) {
   let bestScore  = -1;
   let attempts   = 0;
 
+  // ⭐ v2.8 FIX: Pass 1 = RAW (không preprocess)
+  // → Tesseract tự dùng adaptive threshold nội bộ
+  // → Tránh làm hỏng nét số 9/8/2 trên ảnh nền sáng
   const passes = [
-    { name: 'P1-contrast',   run: () => preprocessPass1(dataUrl, signal) },
+    { name: 'P0-raw',        run: () => Promise.resolve(dataUrl) },
     { name: 'P2-otsu',       run: () => preprocessPass2(dataUrl, signal) },
     { name: 'P3-threshold',  run: () => preprocessPass3(dataUrl, 130, signal) }
   ];
