@@ -16,7 +16,6 @@
 </head>
 <body>
 
-<!-- ============ FLOATING HEADER ============ -->
 <div class="header-wrapper">
   <div class="header-card">
     <div class="header-row">
@@ -34,7 +33,7 @@
         <button class="period-arrow-btn" id="periodNext" onclick="periodNext()" aria-label="Tháng sau">›</button>
       </div>
 
-      <button class="header-icon-btn" onclick="openHistoryTab()" aria-label="Nhật ký" title="Nhật ký · Giữ label Tháng để nhảy mới nhất">
+      <button class="header-icon-btn" onclick="openHistoryTab()" aria-label="Nhật ký">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
           <polyline points="1 4 1 10 7 10"/>
           <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
@@ -46,11 +45,9 @@
   <input type="month" id="monthPickerInput" style="display:none" onchange="jumpToMonth(this.value)">
 </div>
 
-<!-- ============ MAIN ============ -->
 <div class="layout-shell">
   <div class="content-area">
 
-    <!-- ===== BANNER NHẮC QUÉT (v50.9.0) ===== -->
     <div id="reminderBanner" class="reminder-banner" style="display:none">
       <div class="reminder-banner-head">
         <span class="reminder-banner-icon" id="reminderIcon">⚠️</span>
@@ -64,27 +61,29 @@
       </div>
     </div>
 
-    <!-- ===== TAB TỔNG QUAN ===== -->
     <div class="tab-panel active" id="tab-overview">
       <main class="app-container">
 
         <section class="hero" id="overviewHero">
           <div class="hero-top">
-            <span class="hero-eyebrow">Điểm tích lũy</span>
+            <span class="hero-eyebrow">
+              Điểm tích lũy
+              <button type="button" class="hero-info-btn" onclick="toggleHeroMetrics()" aria-label="Chi tiết">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="12" r="9"/>
+                  <line x1="12" y1="8" x2="12" y2="12"/>
+                  <line x1="12" y1="16" x2="12.01" y2="16"/>
+                </svg>
+              </button>
+            </span>
             <span class="hero-context" id="heroContext"></span>
           </div>
 
           <div class="hero-data" id="heroData">
             <div class="hero-row-main">
-              <div class="hero-value" id="overallTotalPoints">0 <span class="hero-value-unit">Điểm</span></div>
-              <button type="button" class="hero-toggle-btn" onclick="toggleHeroMetrics()" aria-label="Chi tiết">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-                  <circle cx="12" cy="12" r="9"/>
-                  <line x1="12" y1="8" x2="12" y2="12"/>
-                  <line x1="12" y1="16" x2="12.01" y2="16"/>
-                </svg>
-                <span id="heroToggleText">Chi tiết</span>
-              </button>
+              <div class="hero-value hero-value-tappable" id="overallTotalPoints" onclick="toggleHeroMetrics()" role="button" tabindex="0" aria-label="Xem chi tiết">
+                0 <span class="hero-value-unit">Điểm</span>
+              </div>
             </div>
 
             <div class="hero-metrics-wrap" id="heroMetricsWrap">
@@ -160,27 +159,27 @@
 
         <details class="card income-section" id="incomeDetails">
           <summary class="income-summary">
-            <div class="income-summary-left">
-              <span class="income-summary-title">
-                Thu nhập
-                <button class="info-icon" type="button"
-                        onclick="event.preventDefault(); event.stopPropagation(); showIncomeInfo()"
-                        aria-label="Trợ giúp">i</button>
-              </span>
-              <div class="income-days-wrap">
-                <span class="income-summary-days" id="incomeDayCount">0/26 công</span>
-                <div class="income-progress">
-                  <div class="income-progress-fill" id="incomeProgressFill"></div>
-                </div>
+            <div class="income-summary-row">
+              <div class="income-summary-left">
+                <span class="income-summary-title">
+                  Thu nhập
+                  <button class="info-icon" type="button"
+                          onclick="event.preventDefault(); event.stopPropagation(); showIncomeInfo()"
+                          aria-label="Trợ giúp">i</button>
+                </span>
+                <span class="income-summary-days" id="incomeDayCount">0/26 công · 0%</span>
+              </div>
+              <div class="income-summary-right">
+                <span class="income-summary-value" id="incomeTotalDisplay">+0 Điểm</span>
+                <span class="income-chevron">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="6 9 12 15 18 9"/>
+                  </svg>
+                </span>
               </div>
             </div>
-            <div class="income-summary-right">
-              <span class="income-summary-value" id="incomeTotalDisplay">+0 Điểm</span>
-              <span class="income-chevron">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
-                  <polyline points="6 9 12 15 18 9"/>
-                </svg>
-              </span>
+            <div class="income-progress">
+              <div class="income-progress-fill" id="incomeProgressFill"></div>
             </div>
           </summary>
 
@@ -220,7 +219,6 @@
               </div>
             </div>
 
-            <!-- v50.11.0: Banner điều kiện Tài xế (≥ 1500 đơn Giao) -->
             <div class="taixe-condition-banner" id="taixeConditionBanner" style="display:none">
               <div class="taixe-banner-head">
                 <span class="taixe-banner-icon" id="taixeBannerIcon">⚠️</span>
@@ -253,21 +251,21 @@
           <div class="card-head">
             <div>
               <h2 class="card-title">Cơ hội tăng điểm</h2>
-              <p class="card-sub">Số đơn cần thêm để đạt mốc tiếp theo</p>
+              <p class="card-sub">Top 4 gần đạt mốc nhất</p>
             </div>
           </div>
-          <div class="filter-bar">
-            <button class="filter-btn active" onclick="setOverviewFilter('del', this)">Giao</button>
-            <button class="filter-btn" onclick="setOverviewFilter('pick', this)">Lấy</button>
-            <button class="filter-btn" onclick="setOverviewFilter('ret', this)">Hoàn</button>
-          </div>
           <div id="overviewMilestoneList"></div>
+          <button type="button" class="view-all-opp-btn" id="viewAllOpportunitiesBtn" onclick="openAllOpportunitiesModal()" style="display:none">
+            <span>Xem tất cả</span>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="9 18 15 12 9 6"/>
+            </svg>
+          </button>
         </section>
 
       </main>
     </div>
 
-    <!-- ===== TAB GIAO ===== -->
     <div class="tab-panel" id="tab-delivery">
       <main class="app-container">
         <section class="hero hero-sm hero-giao">
@@ -300,7 +298,6 @@
       </main>
     </div>
 
-    <!-- ===== TAB LẤY ===== -->
     <div class="tab-panel" id="tab-pickup">
       <main class="app-container">
         <section class="hero hero-sm hero-lay">
@@ -333,7 +330,6 @@
       </main>
     </div>
 
-    <!-- ===== TAB HOÀN ===== -->
     <div class="tab-panel" id="tab-return">
       <main class="app-container">
         <section class="hero hero-sm hero-hoan">
@@ -366,7 +362,6 @@
       </main>
     </div>
 
-    <!-- ===== TAB NHẬT KÝ ===== -->
     <div class="tab-panel" id="tab-history">
       <main class="app-container">
         <section class="card">
@@ -400,7 +395,6 @@
   </div>
 </div>
 
-<!-- ============ BOTTOM NAV ============ -->
 <aside class="bottom-nav">
   <button class="nav-btn active" data-tab="overview" onclick="switchMainTab('overview', this)" aria-label="Tổng quan">
     <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -456,7 +450,6 @@
 <input type="file" id="ocrFileInput" accept="image/*" multiple style="display:none;" onchange="handleOcrImage(event)">
 <input type="date" id="historyDatePickerInput" style="display:none" onchange="applyHistoryDateFilter(this.value)">
 
-<!-- ============ MENU MODAL ============ -->
 <div class="modal-shade" id="menuModal" onclick="if(event.target===this)closeMenuModal()">
   <div class="modal-box menu-modal-box">
     <div class="modal-box-head">
@@ -569,7 +562,6 @@
   </div>
 </div>
 
-<!-- ============ ENTRY MODAL ============ -->
 <div class="modal-shade" id="entryModal">
   <div class="modal-box">
     <div class="modal-box-head">
@@ -649,7 +641,6 @@
   </div>
 </div>
 
-<!-- ============ BATCH OCR MODAL ============ -->
 <div class="modal-shade" id="batchOcrModal">
   <div class="modal-box">
     <div class="modal-box-head">
@@ -674,7 +665,6 @@
   </div>
 </div>
 
-<!-- ============ SETTINGS MODAL ============ -->
 <div class="modal-shade" id="settingsModal" onclick="if(event.target===this)closeSettingsModal()">
   <div class="modal-box">
     <div class="modal-box-head">
@@ -778,7 +768,6 @@
   </div>
 </div>
 
-<!-- ============ PASTE JSON MODAL ============ -->
 <div class="modal-shade" id="pasteJsonModal" onclick="if(event.target===this)closePasteJsonModal()">
   <div class="modal-box coffee-modal-box">
     <div class="modal-box-head">
@@ -801,7 +790,6 @@
   </div>
 </div>
 
-<!-- ============ DONATE MODAL ============ -->
 <div class="modal-shade" id="coffeeModal" onclick="if(event.target===this)closeCoffeeModal()">
   <div class="modal-box coffee-modal-box">
     <div class="modal-box-head">
@@ -835,7 +823,6 @@
   </div>
 </div>
 
-<!-- ============ SHARE TARGET MODAL ============ -->
 <div class="modal-shade" id="shareTargetModal" onclick="if(event.target===this)closeShareTargetModal()">
   <div class="modal-box">
     <div class="modal-box-head">
@@ -899,7 +886,6 @@
   </div>
 </div>
 
-<!-- ============ HISTORY FILTER PANEL ============ -->
 <div class="modal-shade filter-panel-shade" id="historyFilterPanel" onclick="if(event.target===this)closeHistoryFilterPanel()">
   <div class="filter-panel-box">
     <div class="filter-panel-head">
@@ -971,36 +957,55 @@
   </div>
 </div>
 
-<!-- ============ UNDO BANNER ============ -->
+<div class="modal-shade" id="allOpportunitiesModal" onclick="if(event.target===this)closeAllOpportunitiesModal()">
+  <div class="modal-box">
+    <div class="modal-box-head">
+      <h3>Cơ hội tăng điểm</h3>
+      <button class="modal-close-btn" onclick="closeAllOpportunitiesModal()" aria-label="Đóng">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <line x1="18" y1="6" x2="6" y2="18"/>
+          <line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <div class="filter-bar" style="margin-bottom:14px">
+        <button type="button" class="filter-btn active" onclick="setAllOppFilter('del', this)">Giao</button>
+        <button type="button" class="filter-btn" onclick="setAllOppFilter('pick', this)">Lấy</button>
+        <button type="button" class="filter-btn" onclick="setAllOppFilter('ret', this)">Hoàn</button>
+      </div>
+      <div id="allOpportunitiesList"></div>
+    </div>
+    <div class="modal-box-foot">
+      <button class="btn btn-primary" onclick="closeAllOpportunitiesModal()" style="width:100%">Đóng</button>
+    </div>
+  </div>
+</div>
+
 <div id="undoBanner" class="undo-banner">
   <span id="undoMsg" style="flex:1">Đã thực hiện thay đổi</span>
   <button class="undo-btn" onclick="undoLast()">Hoàn tác</button>
 </div>
 
-<!-- ============ OCR LOADING ============ -->
 <div id="ocrLoadingOverlay">
   <div class="spinner"></div>
   <div class="ocr-title" id="ocrStatusTitle">Đang quét ảnh...</div>
   <div class="ocr-desc" id="ocrStatusDesc">Vui lòng chờ trong giây lát</div>
 </div>
 
-<!-- ============ OCR LIGHTBOX ============ -->
 <div id="ocrLightbox" onclick="closeOcrLightbox()">
   <button class="close-lb" onclick="closeOcrLightbox()" aria-label="Đóng">✕</button>
   <img id="ocrLightboxImg" alt="Ảnh phóng to">
 </div>
 
-<!-- ============ TOAST ============ -->
 <div id="appToast" class="app-toast"></div>
 
-<!-- ============ UPDATE BANNER ============ -->
 <div id="updateBanner" class="update-banner">
   <span class="update-banner-icon">🎉</span>
   <span id="updateBannerMsg" class="update-banner-msg">Có bản mới!</span>
   <button class="update-banner-btn" onclick="applyUpdate()">Cập nhật</button>
 </div>
 
-<!-- ============ DIALOG MODAL ============ -->
 <div class="modal-shade dialog-shade" id="dialogModal">
   <div class="dialog-box">
     <div class="dialog-icon-wrap">
