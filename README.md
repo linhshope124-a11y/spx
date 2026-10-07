@@ -1,7 +1,3 @@
-📄 File 3/6: README.md (Full)
-
-Version: v50.11.7 → v50.12.0
-
 ```markdown
 # 🚚 SPX Tracker
 
