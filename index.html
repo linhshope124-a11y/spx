@@ -57,7 +57,7 @@
       <div class="reminder-banner-sub" id="reminderSub"></div>
       <div class="reminder-banner-actions">
         <button class="reminder-btn-secondary" id="reminderSecondaryBtn" onclick="openHistoryTab()" style="display:none">Xem chi tiết</button>
-        <button class="reminder-btn-primary" onclick="document.getElementById('ocrFileInput').click()">📷 Quét ngay</button>
+        <button class="reminder-btn-primary" onclick="openOcrPicker()">📷 Quét ngay</button>
       </div>
     </div>
 
@@ -123,7 +123,7 @@
             <div class="hero-empty-title">Bắt đầu theo dõi</div>
             <div class="hero-empty-sub">Nhập sản lượng để tính điểm tích lũy</div>
             <div class="hero-empty-cta">
-              <button type="button" class="btn-cta-ocr" onclick="document.getElementById('ocrFileInput').click()">
+              <button type="button" class="btn-cta-ocr" onclick="openOcrPicker()">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M3 7V5a2 2 0 0 1 2-2h2"/>
                   <path d="M17 3h2a2 2 0 0 1 2 2v2"/>
@@ -376,15 +376,7 @@
             <button class="filter-btn" onclick="setHistFilter('delivery', this)">Giao</button>
             <button class="filter-btn" onclick="setHistFilter('pickup', this)">Lấy</button>
             <button class="filter-btn" onclick="setHistFilter('return', this)">Hoàn</button>
-            <button class="filter-btn filter-btn-search" id="histFilterChip" onclick="openHistoryFilterPanel()">🔍 Lọc</button>
-          </div>
-
-          <div class="hist-filter-summary" id="histFilterSummary" style="display:none">
-            <div class="hist-filter-summary-head">
-              <span class="hist-filter-summary-count" id="histFilterSummaryCount">🔍 0 filter đang bật</span>
-              <button class="hist-filter-summary-clear" onclick="clearAllHistoryFilters()">✕ Xóa</button>
-            </div>
-            <div class="hist-filter-summary-chips" id="histFilterSummaryChips"></div>
+            <button class="filter-btn filter-btn-date" id="histFilterDateBtn" onclick="openHistoryDatePicker()">📅 Ngày</button>
           </div>
 
           <div id="historyEntries"></div>
@@ -416,7 +408,7 @@
     <span class="nav-label">Giao</span>
   </button>
 
-  <button class="nav-btn-fab" onclick="document.getElementById('ocrFileInput').click()" aria-label="Quét ảnh">
+  <button class="nav-btn-fab" onclick="openOcrPicker()" aria-label="Quét ảnh">
     <span class="fab-icon">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M3 7V5a2 2 0 0 1 2-2h2"/>
@@ -882,77 +874,6 @@
     </div>
     <div class="modal-box-foot">
       <button class="btn btn-primary" onclick="closeShareTargetModal()" style="width:100%">Đã hiểu</button>
-    </div>
-  </div>
-</div>
-
-<div class="modal-shade filter-panel-shade" id="historyFilterPanel" onclick="if(event.target===this)closeHistoryFilterPanel()">
-  <div class="filter-panel-box">
-    <div class="filter-panel-head">
-      <h3>🔍 Lọc nhật ký</h3>
-      <button class="modal-close-btn" onclick="closeHistoryFilterPanel()" aria-label="Đóng">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-          <line x1="18" y1="6" x2="6" y2="18"/>
-          <line x1="6" y1="6" x2="18" y2="18"/>
-        </svg>
-      </button>
-    </div>
-
-    <div class="filter-panel-body">
-
-      <div class="filter-section">
-        <div class="filter-section-title">📅 Thời gian</div>
-        <div class="filter-range-row">
-          <input type="date" id="filterDateFrom" class="input-control filter-date-input">
-          <span class="filter-range-sep">→</span>
-          <input type="date" id="filterDateTo" class="input-control filter-date-input">
-        </div>
-        <div class="filter-quick-row">
-          <button type="button" class="filter-quick-btn" data-range="today" onclick="quickPickDateRange('today', this)">Hôm nay</button>
-          <button type="button" class="filter-quick-btn" data-range="7d" onclick="quickPickDateRange('7d', this)">7 ngày</button>
-          <button type="button" class="filter-quick-btn" data-range="30d" onclick="quickPickDateRange('30d', this)">30 ngày</button>
-          <button type="button" class="filter-quick-btn" data-range="month" onclick="quickPickDateRange('month', this)">Tháng này</button>
-        </div>
-      </div>
-
-      <div class="filter-section">
-        <div class="filter-section-title">📦 Loại đơn</div>
-        <div class="filter-chip-row" id="filterTypeChips">
-          <button type="button" class="filter-toggle-chip active" data-filter-type="delivery" onclick="toggleFilterType(this)">Giao</button>
-          <button type="button" class="filter-toggle-chip active" data-filter-type="pickup" onclick="toggleFilterType(this)">Lấy</button>
-          <button type="button" class="filter-toggle-chip active" data-filter-type="return" onclick="toggleFilterType(this)">Hoàn</button>
-        </div>
-      </div>
-
-      <div class="filter-section">
-        <div class="filter-section-title">🔢 Số lượng đơn</div>
-        <div class="filter-range-row">
-          <input type="number" inputmode="numeric" id="filterMinOrders" class="input-control filter-num-input" placeholder="Min" min="0">
-          <span class="filter-range-sep">→</span>
-          <input type="number" inputmode="numeric" id="filterMaxOrders" class="input-control filter-num-input" placeholder="Max" min="0">
-        </div>
-        <div class="filter-quick-row">
-          <button type="button" class="filter-quick-btn" data-range="lt50" onclick="quickPickOrders('lt50', this)">&lt;50</button>
-          <button type="button" class="filter-quick-btn" data-range="50-100" onclick="quickPickOrders('50-100', this)">50-100</button>
-          <button type="button" class="filter-quick-btn" data-range="100-200" onclick="quickPickOrders('100-200', this)">100-200</button>
-          <button type="button" class="filter-quick-btn" data-range="gt200" onclick="quickPickOrders('gt200', this)">&gt;200</button>
-        </div>
-      </div>
-
-      <div class="filter-section">
-        <div class="filter-section-title">🎯 Trạng thái điểm</div>
-        <div class="filter-chip-row" id="filterScoreChips">
-          <button type="button" class="filter-radio-chip active" data-score="all" onclick="pickFilterScore('all', this)">Tất cả</button>
-          <button type="button" class="filter-radio-chip" data-score="met" onclick="pickFilterScore('met', this)">Đạt mốc</button>
-          <button type="button" class="filter-radio-chip" data-score="notmet" onclick="pickFilterScore('notmet', this)">Chưa mốc</button>
-        </div>
-      </div>
-
-    </div>
-
-    <div class="filter-panel-foot">
-      <button class="btn" onclick="resetHistoryFilterPanel()">🔄 Đặt lại</button>
-      <button class="btn btn-primary" id="applyFilterBtn" onclick="applyHistoryFilterPanel()">✨ Áp dụng</button>
     </div>
   </div>
 </div>
