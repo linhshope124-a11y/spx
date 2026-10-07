@@ -1,5 +1,8 @@
-📄 README.md (FULL) — v50.11.7
+📄 File 3/6: README.md (Full)
 
+Version: v50.11.7 → v50.12.0
+
+```markdown
 # 🚚 SPX Tracker
 
 > PWA theo dõi sản lượng giao/lấy/hoàn & tính điểm phúc lợi SPX Express
@@ -20,13 +23,13 @@ Cài như app:
 
 - 📊 **Theo dõi sản lượng** — 8 dải khối lượng Giao / Lấy / Hoàn
 - 🎯 **Tính điểm phúc lợi** — theo chính sách SPX Express
-- 📷 **Quét ảnh OCR** — tự nhận diện tab (Giao/Lấy/Hoàn) chính xác ~99%
+- 📷 **Quét ảnh OCR** — tự nhận diện tab (Giao/Lấy/Hoàn), accuracy ~95%
 - 📤 **Chia sẻ ảnh** — share từ Gallery → OCR tự chạy (Android Chrome)
 - 💰 **Thu nhập theo tháng** — lưu riêng từng tháng
 - ⚡ **Rule Tài xế** — chỉ cộng khi đơn Giao ≥ 1.500/tháng
 - 🏆 **Hạng thưởng** — Đồng / Bạc / Vàng / B.Kim / K.Cương
 - 🎯 **Cơ hội tăng điểm** — sort theo độ gần đạt mốc
-- 🔍 **Lọc nâng cao Nhật ký** — ngày / loại / SL đơn / trạng thái điểm
+- 🔍 **Lọc nâng cao Nhật ký** — ngày / loại
 - ☁️ **Backup Cloud** — GitHub Gist
 - 📱 **Chạy offline** — sau lần đầu tải
 - 🌙 **Dark mode**
@@ -72,7 +75,7 @@ spx/
 ├── render.js
 ├── ui.js
 ├── entry.js
-├── ocr.js              # OCR Engine v2.6
+├── ocr.js              # OCR Engine v1-β.2
 ├── backup.js
 ├── cloud.js
 ├── theme.js
@@ -86,6 +89,7 @@ spx/
 ## 📐 Công thức nghiệp vụ
 
 ### Quy đổi đơn → công
+
 ```
 
 Đơn tính công = Giao + (Lấy / 6) + Hoàn
@@ -100,10 +104,12 @@ spx/
 | TP.HCM & Hà Nội | ≥ 80 | ≥ 40 |
 
 ### Số ngày tối đa
+
 - Tháng 2 → **24**
 - Các tháng khác → **26**
 
 ### Thu nhập
+
 ```
 
 Lương 1 công = (LCB + Bưu cục + Tài xế) / số ngày tối đa
@@ -114,11 +120,40 @@ Tích lũy      = Lương 1 công × số công đã làm
 ```
 
 ### Tổng điểm
+
 ```
 
 Tổng = Gốc + (Gốc × %hạng) + Thu nhập
 
 ```
+
+---
+
+## 📷 OCR Engine v1-β.2
+
+**Pipeline:**
+1. **Pass 1** — Upscale 2x + Grayscale + **Otsu threshold**
+2. **Pass 2** — Upscale 2x + Grayscale + Threshold 130
+3. **Pass 3** — Upscale 2.5x + Grayscale + Threshold 160
+
+→ Dừng ngay khi tìm được kết quả khớp checksum.
+
+**Parser:** 4 mode match (ordered / closest / before / after) → chọn mode có diff nhỏ nhất.
+
+**Tab detection:** Phân tích pixel gạch cam dưới tab active:
+- `< 25%` → Giao
+- `25% – 42%` → Lấy
+- `≥ 42%` → Hoàn
+
+**Cache 2 tầng:**
+- RAM Map (nhanh, mất khi đóng app)
+- localStorage (chậm hơn, giữ vĩnh viễn)
+
+**Feature bảo hiểm:**
+- ✅ Timeout 60s + auto reset worker
+- ✅ Retry 1 lần khi worker crash
+- ✅ Nút Cancel khi quét nhiều ảnh
+- ✅ Cache LRU 2 tầng
 
 ---
 
@@ -140,26 +175,29 @@ Repo tự động deploy qua GitHub Pages khi push lên main.
 
 ```bash
 git add .
-git commit -m "v50.11.7: mô tả thay đổi"
+git commit -m "v50.12.0: mô tả thay đổi"
 git push
 ```
 
-⚠️ Nhớ bump CACHE trong sw.js mỗi lần deploy (để SW force fetch file mới).
+⚠️ Nhớ bump CACHE trong sw.js mỗi lần deploy.
 
 ---
 
 🔄 Version History
 
 Version Thay đổi chính
+v50.12.0 OCR Engine v1-β.2 — nền tảng v1 (Otsu) + timeout + cache LS + cancel
+v50.11.13 OCR v3.2 — ordered fallback + bỏ contrast stretch
+v50.11.12 OCR v3.1 — pass 1 = Otsu
 v50.11.7 Bỏ card Phân bổ · Đổi "Miền" → "MIỀN TRUNG"
 v50.11.6 Cơ hội tăng điểm — bỏ "Tất cả", sort theo độ gần đạt mốc
-v50.11.5 Batch 1 fixes: sanitize weights · dialog block · token warning · SHA-256 · MAX_UNDO 10
+v50.11.5 Batch fixes: sanitize weights · dialog block · SHA-256 · MAX_UNDO 10
 v50.11.4 Cập nhật guide.html + version.json
-v50.11.2 OCR Engine v2.5 — fix tab detection (zone-fallback + tab-cluster)
+v50.11.2 OCR Engine v2.5 — fix tab detection
 v50.11.1 Fix PWA install (icon PNG 192/512)
-v50.11.0 Share Target + Lọc nâng cao Nhật ký + Business Rule Tài xế
-v50.10.0 OCR Engine v2.0 → v2.4 (12+ bug fixes)
-v50.9.0 Reminder banner — nhắc quét ngày thiếu
+v50.11.0 Share Target + Lọc nâng cao + Business Rule Tài xế
+v50.10.0 OCR Engine v2.0 → v2.4
+v50.9.0 Reminder banner
 v50.8.0 Hạng thưởng lưu riêng theo tháng
 v50.4 Thu nhập lưu theo từng tháng
 v49 Hero + Tiles gộp, clamp font
