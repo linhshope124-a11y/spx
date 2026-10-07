@@ -1,5 +1,5 @@
 // =============================================================
-// OCR ENGINE v1-β.2 — PART 1/2
+// OCR ENGINE v1-β.3 — PART 1/2
 // Imports · Config · Worker · Preprocess · Parse
 // =============================================================
 
@@ -8,14 +8,14 @@ import { WEIGHT_KEYS } from './config.js';
 import { getTodayIso, formatDateDisplay, generateId } from './utils.js';
 import { openAddModal, openEditModal, switchModalSubTab, showToast } from './ui.js';
 import { updateAllViews } from './render.js';
-import { showAlert, showConfirm } from './dialog.js';
+import { showConfirm } from './dialog.js';
 
 // ==================== CONFIG ====================
 const DISABLE_AUTO_SAVE = true;
 
 const OCR_TIMEOUT_MS    = 60000;
-const OCR_CACHE_VERSION = 'v1b2';
-const OCR_CACHE_MAX     = 100;
+const OCR_CACHE_VERSION = 'v1b-3';
+const OCR_CACHE_MAX     = 50;
 const LS_CACHE_PREFIX   = 'spx_ocr_ls_';
 const LS_CACHE_INDEX    = 'spx_ocr_ls_index';
 const LS_CACHE_MAX_BYTES = 4 * 1024 * 1024;
@@ -67,22 +67,6 @@ async function ensurePushUndo() {
     }
   })();
   return _pushUndoLoading;
-}
-
-// ==================== STUBS ====================
-export async function handleSharedImage(sharedFiles) {
-  const arr = Array.from(sharedFiles || []);
-  if (arr.length === 0) {
-    showToast('Không nhận được ảnh từ chia sẻ', 'warning', 2500);
-    return;
-  }
-  const images = arr.filter(f => f && f.type && f.type.startsWith('image/'));
-  if (images.length === 0) {
-    showToast('Chia sẻ không chứa ảnh', 'error', 3000);
-    return;
-  }
-  const fakeEvent = { target: { files: images, value: '' } };
-  await handleOcrImage(fakeEvent);
 }
 
 // ==================== TESSERACT WORKER ====================
@@ -248,13 +232,15 @@ function otsuThreshold(gray) {
 }
 
 // ==================== PREPROCESSING ====================
-async function preprocessImage(rawDataUrl, options = {}) {
+async function preprocessImage(rawDataUrl, options = {}, signal) {
+  _checkAborted(signal);
   const { upscale = 2.0, useOtsu = true, threshold = 145 } = options;
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.crossOrigin = 'anonymous';
     img.onload = () => {
       try {
+        _checkAborted(signal);
         const scale = Math.min(4, upscale);
         const canvas = document.createElement('canvas');
         canvas.width  = Math.floor(img.width  * scale);
@@ -508,8 +494,8 @@ function extractDate(text) {
   return getTodayIso();
 }
 // =============================================================
-// OCR ENGINE v1-β.2 — PART 2/2
-// Cache LS · Main · Modals · Copy log v3-style · Exports
+// OCR ENGINE v1-β.3 — PART 2/2
+// Cache LS Optimized · Main · Modals · Copy log · Exports
 // =============================================================
 
 // ==================== LOG STORAGE ====================
@@ -533,7 +519,6 @@ function buildWeights(r) {
   return w;
 }
 
-// ⭐ FIX: explicit null — không default return
 function getTypeFromResult(r) {
   if (r.detectedColorType === 'del')  return 'delivery';
   if (r.detectedColorType === 'pick') return 'pickup';
@@ -558,7 +543,6 @@ function findExactDuplicate(r) {
   ) || null;
 }
 
-// ⭐ Thumbnail placeholder khi rỗng
 const EMPTY_THUMB = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI1NiIgaGVpZ2h0PSI1NiI+PGRlZnM+PHBhdHRlcm4gaWQ9ImciIHdpZHRoPSIxMCIgaGVpZ2h0PSIxMCIgcGF0dGVyblVuaXRzPSJ1c2VyU3BhY2VPblVzZSI+PHJlY3Qgd2lkdGg9IjUiIGhlaWdodD0iNSIgZmlsbD0iI2U1ZTdlYiIvPjxyZWN0IHg9IjUiIHk9IjUiIHdpZHRoPSI1IiBoZWlnaHQ9IjUiIGZpbGw9IiNlNWU3ZWIiLz48L3BhdHRlcm4+PC9kZWZzPjxyZWN0IHdpZHRoPSI1NiIgaGVpZ2h0PSI1NiIgZmlsbD0idXJsKCNnKSIvPjwvc3ZnPg==';
 
 // ==================== VALIDATE PHÂN BỐ ====================
@@ -662,24 +646,42 @@ async function tryAutoSaveForce(r) {
   return true;
 }
 
-// ==================== CACHE 2 TẦNG ====================
+// ==================== CACHE 2 TẦNG (Optimized) ====================
 const ocrCache = new Map();
+
+// ⚡ v1-β.3: Cache index trong module — giảm đọc localStorage
+let _cacheIndexCache = null;
 
 function _cacheKey(hash) {
   return `${OCR_CACHE_VERSION}_${hash}`;
 }
 
 function readCacheIndex() {
+  if (_cacheIndexCache !== null) return _cacheIndexCache;
   try {
     const raw = localStorage.getItem(LS_CACHE_INDEX);
-    if (!raw) return [];
+    if (!raw) {
+      _cacheIndexCache = [];
+      return _cacheIndexCache;
+    }
     const arr = JSON.parse(raw);
-    return Array.isArray(arr) ? arr : [];
-  } catch { return []; }
+    _cacheIndexCache = Array.isArray(arr) ? arr : [];
+    return _cacheIndexCache;
+  } catch {
+    _cacheIndexCache = [];
+    return _cacheIndexCache;
+  }
 }
 
 function writeCacheIndex(index) {
-  try { localStorage.setItem(LS_CACHE_INDEX, JSON.stringify(index)); } catch {}
+  _cacheIndexCache = index;
+  try {
+    localStorage.setItem(LS_CACHE_INDEX, JSON.stringify(index));
+  } catch {}
+}
+
+function invalidateCacheIndex() {
+  _cacheIndexCache = null;
 }
 
 function estimateLocalStorageBytes() {
@@ -732,7 +734,11 @@ function cacheGet(hash) {
     const v = ocrCache.get(key);
     const index = readCacheIndex();
     const idx = index.indexOf(key);
-    if (idx !== -1) { index.splice(idx, 1); index.push(key); writeCacheIndex(index); }
+    if (idx !== -1) {
+      index.splice(idx, 1);
+      index.push(key);
+      writeCacheIndex(index);
+    }
     return v;
   }
   try {
@@ -742,7 +748,11 @@ function cacheGet(hash) {
       ocrCache.set(key, value);
       const index = readCacheIndex();
       const idx = index.indexOf(key);
-      if (idx !== -1) { index.splice(idx, 1); index.push(key); writeCacheIndex(index); }
+      if (idx !== -1) {
+        index.splice(idx, 1);
+        index.push(key);
+        writeCacheIndex(index);
+      }
       return value;
     }
   } catch {}
@@ -755,7 +765,10 @@ function cacheSet(hash, value) {
   try {
     localStorage.setItem(LS_CACHE_PREFIX + key, JSON.stringify(value));
     const index = readCacheIndex();
-    if (!index.includes(key)) { index.push(key); writeCacheIndex(index); }
+    if (!index.includes(key)) {
+      index.push(key);
+      writeCacheIndex(index);
+    }
     pruneCacheIfNeeded();
   } catch (e) {
     try {
@@ -775,6 +788,7 @@ export async function clearOcrCache() {
 
   let count = 0;
   ocrCache.clear();
+  _cacheIndexCache = [];
   try {
     const index = readCacheIndex();
     count = index.length;
@@ -790,6 +804,7 @@ export async function clearOcrCache() {
     toRemove.forEach(k => { try { localStorage.removeItem(k); } catch {} });
     count = Math.max(count, toRemove.length);
   } catch {}
+  invalidateCacheIndex();
   showToast(`Đã xóa ${count} cache OCR`, 'success', 2500);
   return count;
 }
@@ -807,6 +822,9 @@ export function getOcrCacheStats() {
 
 // ==================== HASH BLOB ====================
 async function hashBlob(file) {
+  if (typeof crypto === 'undefined' || !crypto.subtle) {
+    return 'fb_' + file.size + '_' + (file.name || '').length + '_' + (file.lastModified || 0);
+  }
   try {
     const buf = await file.arrayBuffer();
     const hashBuf = await crypto.subtle.digest('SHA-256', buf);
@@ -859,13 +877,9 @@ export async function copyOcrLog() {
   }
 }
 
-// ⭐ COPY LOG v3-STYLE: chèn cạnh nút "Xem log"
 function injectCopyLogButton() {
   const toggleBtn = document.getElementById('ocrDebugToggle');
-  if (!toggleBtn) {
-    console.warn('[OCR] ocrDebugToggle không tồn tại');
-    return;
-  }
+  if (!toggleBtn) return;
 
   const old = document.getElementById('ocrCopyLogBtn');
   if (old) old.remove();
@@ -889,7 +903,6 @@ function injectCopyLogButton() {
   copyBtn.onclick = () => copyOcrLog();
 
   toggleBtn.parentNode.appendChild(copyBtn);
-  console.log('[OCR] Đã inject nút Copy log cạnh Xem log');
 }
 
 // ==================== CANCEL BUTTON ====================
@@ -919,35 +932,46 @@ function ensureCancelButton() {
   overlay.appendChild(btn);
 }
 
-// ==================== MAIN: HANDLE OCR IMAGE ====================
-export async function handleOcrImage(event) {
-  const files = Array.from(event.target.files || []);
-  event.target.value = '';
-  if (files.length === 0) { pendingAppend = false; return; }
-
-  const wasAppend = pendingAppend;
-  pendingAppend = false;
+// ==================== PIPELINE ====================
+async function _runOcrFromFiles(files, wasAppend = false) {
+  if (!files || files.length === 0) return;
 
   const ctrl = _newAbortController();
   const signal = ctrl.signal;
 
   const overlay = document.getElementById('ocrLoadingOverlay');
-  overlay.style.display = 'flex';
+  const statusTitle = document.getElementById('ocrStatusTitle');
+  const statusDesc  = document.getElementById('ocrStatusDesc');
+
+  if (overlay) overlay.style.display = 'flex';
   ensureCancelButton();
 
   try {
-    const newResults = await processFiles(files, signal);
-    overlay.style.display = 'none';
+    const results = [];
 
-    const autoSaved = [];
-    const duplicates = [];
+    for (let i = 0; i < files.length; i++) {
+      _checkAborted(signal);
+      if (statusTitle) statusTitle.innerText = `Ảnh ${i + 1}/${files.length}`;
+      if (statusDesc)  statusDesc.innerText  = 'Đang xử lý...';
+
+      const item = await processOneFile(files[i], signal);
+      results.push(item);
+    }
+
+    if (overlay) overlay.style.display = 'none';
+
+    const autoSaved     = [];
+    const duplicates    = [];
     const needAttention = [];
 
-    for (const item of newResults) {
+    for (const item of results) {
       if (item.error) { needAttention.push(item); continue; }
       const r = item.result;
 
-      if (findExactDuplicate(r)) { duplicates.push(item); continue; }
+      if (findExactDuplicate(r)) {
+        duplicates.push(item);
+        continue;
+      }
 
       if (await tryAutoSave(r)) {
         autoSaved.push(item);
@@ -966,7 +990,7 @@ export async function handleOcrImage(event) {
       }
 
       if (files.length === 1) {
-        const item = newResults[0];
+        const item = needAttention[0];
         if (item.error) {
           showToast('Không đọc được ảnh: ' + item.error, 'error', 3000);
           return;
@@ -982,8 +1006,9 @@ export async function handleOcrImage(event) {
     }
 
     if (files.length === 1) {
-      const item = newResults[0];
+      const item = results[0];
       const r = item.result;
+
       if (duplicates.length === 1) {
         showToast(
           `Ảnh đã tồn tại — ${getTypeLabel(r)} ${formatDateDisplay(r.parsedDate)}: ${r.totalFound} đơn`,
@@ -991,6 +1016,7 @@ export async function handleOcrImage(event) {
         );
         return;
       }
+
       if (autoSaved.length === 1) {
         showToast(
           `Đã tự động lưu ${getTypeLabel(r)} ${formatDateDisplay(r.parsedDate)}: ${r.totalFound} đơn`,
@@ -1004,131 +1030,116 @@ export async function handleOcrImage(event) {
       showSummaryToast(autoSaved.length, duplicates.length, 0);
     }
   } catch (err) {
-    overlay.style.display = 'none';
+    if (overlay) overlay.style.display = 'none';
 
     if (err.message === 'OCR_CANCELLED') {
       showToast('Đã hủy OCR', 'warning', 2000);
       return;
     }
 
-    console.error(err);
+    console.error('[OCR] Pipeline error:', err);
     showToast('Lỗi khi quét ảnh: ' + err.message, 'error', 3000);
   } finally {
     _clearAbortController(ctrl);
   }
 }
 
-function showSummaryToast(saved, dup, need, delayMs = 0) {
-  const parts = [];
-  if (saved > 0) parts.push(`Đã lưu ${saved}`);
-  if (dup > 0)   parts.push(`bỏ qua ${dup} trùng`);
-  if (need > 0)  parts.push(`${need} cần check`);
+// ==================== PROCESS ONE FILE ====================
+async function processOneFile(file, signal) {
+  _checkAborted(signal);
 
-  if (parts.length === 0) return;
+  const hash = await hashBlob(file);
+  const cached = cacheGet(hash);
 
-  let type = 'success';
-  if (need > 0) type = 'warning';
-  else if (dup > 0 && saved === 0) type = 'warning';
-
-  const msg = parts.join(', ');
-  const fire = () => showToast(msg, type, 3000);
-  if (delayMs > 0) setTimeout(fire, delayMs);
-  else fire();
-}
-
-// ==================== PROCESS FILES ====================
-async function processFiles(files, signal) {
-  const out = [];
-  const statusTitle = document.getElementById('ocrStatusTitle');
-  const statusDesc  = document.getElementById('ocrStatusDesc');
-  statusTitle.innerText = 'Đang khởi tạo...';
-  statusDesc.innerText  = cachedTesseractWorker ? 'Worker sẵn sàng' : 'Lần đầu tải ~15MB...';
-
-  await getTesseractWorker();
-
-  for (let i = 0; i < files.length; i++) {
+  if (cached) {
     _checkAborted(signal);
-    const file = files[i];
-    statusTitle.innerText = `Ảnh ${i + 1}/${files.length}`;
-    statusDesc.innerText  = 'Đang đọc file...';
-
-    try {
-      const hash = await hashBlob(file);
-      const cached = cacheGet(hash);
-
-      if (cached) {
-        statusDesc.innerText = '⚡ Dùng cache...';
-        const rawDataUrl = await readFileAsDataURL(file);
-        const cachedResult = { ...cached.result, fullDataUrl: rawDataUrl };
-        out.push({ file: file.name, thumbnail: cached.thumbnail, result: cachedResult, error: null, fromCache: true });
-        continue;
-      }
-
-      statusDesc.innerText = 'Đang đọc file...';
-      const rawDataUrl = await readFileAsDataURL(file);
-
-      statusDesc.innerText = 'Xử lý ảnh...';
-      const thumbnail = await makeThumbnail(rawDataUrl, 96);
-
-      statusDesc.innerText = 'Xác định tab...';
-      const detectedType = await detectActiveTabByOrangeLine(rawDataUrl);
-
-      statusDesc.innerText = 'Quét lần 1...';
-      const pre1 = await preprocessImage(rawDataUrl, { upscale: 2.0, useOtsu: true });
-      _checkAborted(signal);
-      const text1 = await ocrRecognize(pre1.dataUrl, signal);
-      const parsed1 = parseOcrText(text1);
-
-      let bestResult = parsed1;
-      let bestText = text1;
-      let bestDiff = parsed1.expectedTotal !== null ? Math.abs(parsed1.totalFound - parsed1.expectedTotal) : 9999;
-
-      if (bestDiff > 0) {
-        _checkAborted(signal);
-        statusDesc.innerText = 'Quét lần 2...';
-        const pre2 = await preprocessImage(rawDataUrl, { upscale: 2.0, useOtsu: false, threshold: 130 });
-        const text2 = await ocrRecognize(pre2.dataUrl, signal);
-        const parsed2 = parseOcrText(text2);
-        const diff2 = parsed2.expectedTotal !== null ? Math.abs(parsed2.totalFound - parsed2.expectedTotal) : 9999;
-        if (diff2 < bestDiff) { bestResult = parsed2; bestText = text2; bestDiff = diff2; }
-      }
-
-      if (bestDiff > 0) {
-        _checkAborted(signal);
-        statusDesc.innerText = 'Quét lần 3...';
-        const pre3 = await preprocessImage(rawDataUrl, { upscale: 2.5, useOtsu: false, threshold: 160 });
-        const text3 = await ocrRecognize(pre3.dataUrl, signal);
-        const parsed3 = parseOcrText(text3);
-        const diff3 = parsed3.expectedTotal !== null ? Math.abs(parsed3.totalFound - parsed3.expectedTotal) : 9999;
-        if (diff3 < bestDiff) { bestResult = parsed3; bestText = text3; bestDiff = diff3; }
-      }
-
-      const result = {
-        detectedColorType: detectedType || 'del',
-        parsedDate: extractDate(bestText),
-        weights: bestResult.weights,
-        confidences: bestResult.confidences,
-        expectedTotal: bestResult.expectedTotal,
-        totalFound: bestResult.totalFound,
-        mode: bestResult.mode,
-        rawText: bestText,
-        fullDataUrl: rawDataUrl
-      };
-
-      out.push({ file: file.name, thumbnail, result, error: null });
-      cacheSet(hash, { thumbnail, result: { ...result, fullDataUrl: '' } });
-    } catch (err) {
-      if (err.message === 'OCR_CANCELLED') throw err;
-      console.error('[OCR]', file.name, err);
-      out.push({ file: file.name, thumbnail: '', result: null, error: err.message });
-    }
+    const rawDataUrl = await readFileAsDataURL(file);
+    const cachedResult = { ...cached.result, fullDataUrl: rawDataUrl };
+    return {
+      file: file.name,
+      thumbnail: cached.thumbnail,
+      result: cachedResult,
+      error: null,
+      fromCache: true
+    };
   }
-  return out;
+
+  _checkAborted(signal);
+  const rawDataUrl = await readFileAsDataURL(file);
+
+  _checkAborted(signal);
+  const thumbnail = await makeThumbnail(rawDataUrl, 96);
+
+  _checkAborted(signal);
+  const detectedType = await detectActiveTabByOrangeLine(rawDataUrl);
+
+  _checkAborted(signal);
+  const statusDesc = document.getElementById('ocrStatusDesc');
+
+  // Pass 1: Otsu
+  if (statusDesc) statusDesc.innerText = 'Quét lần 1...';
+  const pre1 = await preprocessImage(rawDataUrl, { upscale: 2.0, useOtsu: true }, signal);
+  _checkAborted(signal);
+  const text1 = await ocrRecognize(pre1.dataUrl, signal);
+  const parsed1 = parseOcrText(text1);
+
+  let bestResult = parsed1;
+  let bestText = text1;
+  let bestDiff = parsed1.expectedTotal !== null
+    ? Math.abs(parsed1.totalFound - parsed1.expectedTotal)
+    : 9999;
+
+  // Pass 2: Threshold 130
+  if (bestDiff > 0) {
+    _checkAborted(signal);
+    if (statusDesc) statusDesc.innerText = 'Quét lần 2...';
+    const pre2 = await preprocessImage(rawDataUrl, { upscale: 2.0, useOtsu: false, threshold: 130 }, signal);
+    _checkAborted(signal);
+    const text2 = await ocrRecognize(pre2.dataUrl, signal);
+    const parsed2 = parseOcrText(text2);
+    const diff2 = parsed2.expectedTotal !== null
+      ? Math.abs(parsed2.totalFound - parsed2.expectedTotal)
+      : 9999;
+    if (diff2 < bestDiff) { bestResult = parsed2; bestText = text2; bestDiff = diff2; }
+  }
+
+  // Pass 3: Threshold 160
+  if (bestDiff > 0) {
+    _checkAborted(signal);
+    if (statusDesc) statusDesc.innerText = 'Quét lần 3...';
+    const pre3 = await preprocessImage(rawDataUrl, { upscale: 2.5, useOtsu: false, threshold: 160 }, signal);
+    _checkAborted(signal);
+    const text3 = await ocrRecognize(pre3.dataUrl, signal);
+    const parsed3 = parseOcrText(text3);
+    const diff3 = parsed3.expectedTotal !== null
+      ? Math.abs(parsed3.totalFound - parsed3.expectedTotal)
+      : 9999;
+    if (diff3 < bestDiff) { bestResult = parsed3; bestText = text3; bestDiff = diff3; }
+  }
+
+  const result = {
+    detectedColorType: detectedType || 'del',
+    parsedDate: extractDate(bestText),
+    weights: bestResult.weights,
+    confidences: bestResult.confidences,
+    expectedTotal: bestResult.expectedTotal,
+    totalFound: bestResult.totalFound,
+    mode: bestResult.mode,
+    rawText: bestText,
+    fullDataUrl: rawDataUrl
+  };
+
+  cacheSet(hash, {
+    thumbnail,
+    result: { ...result, fullDataUrl: '' }
+  });
+
+  return { file: file.name, thumbnail, result, error: null };
 }
 
 // ==================== FILL MODAL ====================
-export function fillModalFromResult(batchItem) {
-  const r = batchItem.result;
+export function fillModalFromResult(item) {
+  const r = item.result;
   state.lastOcrImageDataUrl = r.fullDataUrl || '';
   state.isOcrScan = true;
 
@@ -1160,7 +1171,6 @@ export function fillModalFromResult(batchItem) {
 
   applyConfidenceHighlight(r.confidences, r.detectedColorType);
 
-  // ⭐ Inject nút Copy log cạnh "Xem log" (giống v3)
   setTimeout(() => injectCopyLogButton(), 100);
 
   const typeText = getTypeLabel(r);
@@ -1189,6 +1199,7 @@ export function fillModalFromResult(batchItem) {
   showToast(msg + ' — kiểm tra và lưu', toastType, 3500);
 }
 
+// ==================== DISTRIBUTION WARNING ====================
 function showDistributionWarning(distCheck, detectedType) {
   const old = document.getElementById('distWarningBanner');
   if (old) old.remove();
@@ -1223,7 +1234,7 @@ function showDistributionWarning(distCheck, detectedType) {
   }
 }
 
-// ==================== COMPARE MODAL ====================
+// ==================== COMPARE ====================
 function buildCompareText(ocrW, existingW) {
   const suffixToWeight = {
     '0_2':'w0_2','2_4':'w2_4','4_6':'w4_6','6_8':'w6_8',
@@ -1258,21 +1269,22 @@ export function openCompareModal(batchItem, existingRecord) {
 
   openEditModal(type, existingRecord.id);
 
-  setTimeout(async () => {
+  setTimeout(() => {
     const previewBox = document.getElementById('ocrPreviewBox');
     const previewImg = document.getElementById('ocrPreviewImg');
     if (previewBox && previewImg && r.fullDataUrl) {
       previewImg.src = r.fullDataUrl;
       previewBox.style.display = 'block';
-      setTimeout(() => injectCopyLogButton(), 100);
     }
+    setTimeout(() => injectCopyLogButton(), 100);
+
     const cmp = buildCompareText(r.weights, existingRecord.weights);
     const dateStr = formatDateDisplay(r.parsedDate);
     let msg = `📊 SO SÁNH NGÀY ${dateStr}\n\n`;
     msg += `📁 Dữ liệu ĐÃ LƯU được hiển thị trong ô nhập.\n`;
     msg += `📷 Ảnh OCR được hiển thị bên dưới.\n\n`;
     msg += cmp.text;
-    await showAlert(msg, { title: 'So sánh OCR', okText: 'Đã hiểu' });
+    alert(msg);
   }, 200);
 }
 
@@ -1293,11 +1305,18 @@ function renderBatchList() {
   const list = document.getElementById('batchList');
   list.innerHTML = '';
   document.getElementById('batchCount').innerText = batchResults.length;
+
   if (batchResults.length === 0) {
     list.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-3);font-size:12px">Không có ảnh nào.</div>';
     return;
   }
-  const typeMap = { del: ['Giao', 'tag-delivery'], pick: ['Lấy', 'tag-pickup'], ret: ['Hoàn', 'tag-return'] };
+
+  const typeMap = {
+    del:  ['Giao', 'tag-delivery'],
+    pick: ['Lấy',  'tag-pickup'],
+    ret:  ['Hoàn', 'tag-return']
+  };
+
   batchResults.forEach((item, idx) => {
     const div = document.createElement('div');
     if (item.error) {
@@ -1313,7 +1332,7 @@ function renderBatchList() {
         </div>`;
     } else {
       const r = item.result;
-      const [typeLabel, typeClass] = typeMap[r.detectedColorType];
+      const [typeLabel, typeClass] = typeMap[r.detectedColorType] || ['?', 'tag-delivery'];
       let lowCount = 0, midCount = 0;
       Object.values(r.confidences).forEach(c => {
         if (c == null) return;
@@ -1465,12 +1484,6 @@ export async function saveBatchAll() {
   showToast(doneMsg, 'success', 3000);
 }
 
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, c => ({
-    '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
-  }[c]));
-}
-
 // ==================== HIGHLIGHT ====================
 export function applyConfidenceHighlight(confMap, detectedType) {
   const prefix = detectedType === 'del' ? 'del_inp'
@@ -1522,4 +1535,49 @@ export function openOcrLightbox() {
 }
 export function closeOcrLightbox() {
   document.getElementById('ocrLightbox').classList.remove('active');
+}
+
+// ==================== ENTRY: INPUT FILE ====================
+export async function handleOcrImage(event) {
+  const files = Array.from(event.target.files || []);
+  event.target.value = '';
+  if (files.length === 0) { pendingAppend = false; return; }
+
+  const wasAppend = pendingAppend;
+  pendingAppend = false;
+
+  await _runOcrFromFiles(files, wasAppend);
+}
+
+// ==================== ENTRY: SHARE TARGET ====================
+export async function handleSharedImage(sharedFiles) {
+  const arr = Array.from(sharedFiles || []);
+  if (arr.length === 0) {
+    showToast('Không nhận được ảnh từ chia sẻ', 'warning', 2500);
+    return;
+  }
+
+  const images = arr.filter(f => f && f.type && f.type.startsWith('image/'));
+  const skipped = arr.length - images.length;
+
+  if (images.length === 0) {
+    showToast(
+      skipped > 0 ? 'Chia sẻ không chứa ảnh — bỏ qua' : 'Không có file hợp lệ',
+      'error', 3000
+    );
+    return;
+  }
+
+  if (skipped > 0) {
+    showToast(`Bỏ qua ${skipped} mục không phải ảnh`, 'warning', 2000);
+  }
+
+  await _runOcrFromFiles(images, false);
+}
+
+// ==================== ESCAPE HTML ====================
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({
+    '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
+  }[c]));
 }
