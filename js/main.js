@@ -17,11 +17,7 @@ import {
   initPeriodLabelLongPress,
   toggleOcrDebugText,
   openShareTargetModal, closeShareTargetModal,
-  openHistoryFilterPanel, closeHistoryFilterPanel,
-  quickPickDateRange, quickPickOrders,
-  toggleFilterType, pickFilterScore,
-  resetHistoryFilterPanel, applyHistoryFilterPanel,
-  clearAllHistoryFilters,
+  openHistoryDatePicker, applyHistoryDateFilter, clearHistoryDateFilter,
   openAllOpportunitiesModal, closeAllOpportunitiesModal,
   showToast
 } from './ui.js';
@@ -186,6 +182,24 @@ function _showIncomeInfo() {
   );
 }
 
+// ================ v50.11.11: OPEN OCR PICKER (defer preload) ================
+/**
+ * Mở file picker để quét ảnh.
+ * Preload Tesseract worker CHỈ KHI user thực sự bấm 📷 (không auto preload).
+ * → Tiết kiệm ~2MB data cho user không dùng OCR.
+ */
+let _ocrPreloadTriggered = false;
+function _openOcrPicker() {
+  // Preload lần đầu (fire-and-forget)
+  if (!_ocrPreloadTriggered) {
+    _ocrPreloadTriggered = true;
+    preloadTesseractWorker();     // không await — để picker mở ngay
+  }
+
+  const input = document.getElementById('ocrFileInput');
+  if (input) input.click();
+}
+
 // ================ AUTO-UPDATE ================
 let swRegistration = null;
 let currentAppVersion = null;
@@ -221,9 +235,8 @@ async function registerSW() {
 }
 
 /**
- * v50.11.10: Kiểm tra version từ server.
- * @param {boolean} manual - true nếu user bấm menu "Kiểm tra cập nhật"
- *   → hiện toast phản hồi (có bản mới / đã mới nhất / lỗi mạng)
+ * Kiểm tra version từ server.
+ * @param {boolean} manual - true nếu user bấm menu
  */
 async function checkVersion(manual = false) {
   try {
@@ -300,6 +313,24 @@ async function applyUpdate() {
     console.error('[Update] failed:', e);
     window.location.reload();
   }
+}
+
+// ================ v50.11.11: VISIBILITY-BASED CHECK ================
+/**
+ * Fix #6: thay setInterval 5 phút bằng visibility-based check.
+ * - Khi user quay lại app (visible) → check 1 lần.
+ * - Không còn check ngầm khi app ẩn → tiết kiệm pin.
+ * - Throttle: tối thiểu 5 phút giữa 2 lần check tự động.
+ */
+let _lastAutoCheckTime = 0;
+const AUTO_CHECK_THROTTLE_MS = 5 * 60 * 1000;
+
+function _maybeAutoCheck() {
+  if (document.hidden) return;
+  const now = Date.now();
+  if (now - _lastAutoCheckTime < AUTO_CHECK_THROTTLE_MS) return;
+  _lastAutoCheckTime = now;
+  checkVersion(false);
 }
 
 // ================ SHARE TARGET LAUNCH ================
@@ -389,6 +420,10 @@ async function _runShareTargetIfNeeded() {
 
   console.log('[ShareTarget] Phát hiện launch từ chia sẻ ảnh');
 
+  // Preload OCR worker vì chắc chắn sẽ dùng
+  _ocrPreloadTriggered = true;
+  preloadTesseractWorker();
+
   await new Promise(r => setTimeout(r, 400));
 
   const files = await _consumeSharedFiles();
@@ -445,19 +480,17 @@ Object.assign(window, {
   closeShareTargetModal,
   handleSharedImage,
 
-  openHistoryFilterPanel,
-  closeHistoryFilterPanel,
-  quickPickDateRange,
-  quickPickOrders,
-  toggleFilterType,
-  pickFilterScore,
-  resetHistoryFilterPanel,
-  applyHistoryFilterPanel,
-  clearAllHistoryFilters,
+  // v50.11.11: History date filter (thay 9 hàm filter cũ)
+  openHistoryDatePicker,
+  applyHistoryDateFilter,
+  clearHistoryDateFilter,
 
   openAllOpportunitiesModal,
   closeAllOpportunitiesModal,
   setAllOppFilter,
+
+  // v50.11.11: open OCR picker (defer Tesseract)
+  openOcrPicker: _openOcrPicker,
 
   // REGION
   changeRegion: function(regionKey, el) {
@@ -559,11 +592,14 @@ window.openSettingsModal = function() {
 
   attachAutoClearInputs();
   updateAllViews();
-  setTimeout(() => preloadTesseractWorker(), 2000);
+  // v50.11.11: KHÔNG auto preload Tesseract — chỉ preload khi user bấm 📷
 
   registerSW();
   setTimeout(() => checkVersion(false), 2000);
-  setInterval(() => checkVersion(false), 5 * 60 * 1000);
+
+  // v50.11.11: visibility-based check (thay setInterval)
+  document.addEventListener('visibilitychange', _maybeAutoCheck);
+  window.addEventListener('focus', _maybeAutoCheck);
 
   _runShareTargetIfNeeded();
 })();
