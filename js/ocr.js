@@ -1,5 +1,5 @@
 // =============================================================
-// OCR ENGINE v3.1 — PART 1/3
+// OCR ENGINE v3.2 — PART 1/3
 // Config · AbortController · Worker · Cache
 // =============================================================
 
@@ -11,7 +11,7 @@ import { updateAllViews } from './render.js';
 import { showAlert, showConfirm } from './dialog.js';
 
 // ==================== CONFIG ====================
-const OCR_CACHE_VERSION = 'v5';
+const OCR_CACHE_VERSION = 'v6';
 const OCR_TIMEOUT_MS    = 30000;
 const OCR_CACHE_MAX     = 200;
 const LS_CACHE_PREFIX   = 'spx_ocr_cache_';
@@ -399,7 +399,7 @@ export function getOcrCacheStats() {
   };
 }
 // =============================================================
-// OCR ENGINE v3.1 — PART 2/3
+// OCR ENGINE v3.2 — PART 2/3
 // Image · Tab Detect · Card Crop · Preprocess · Parser · Validation · Scoring
 // =============================================================
 
@@ -630,38 +630,6 @@ function _toGrayscale(data) {
   return gray;
 }
 
-function _applyContrast(gray, lowPct = 0.02, highPct = 0.98) {
-  const hist = new Array(256).fill(0);
-  for (let i = 0; i < gray.length; i++) hist[gray[i]]++;
-
-  const total = gray.length;
-  const lowTarget  = total * lowPct;
-  const highTarget = total * highPct;
-
-  let acc = 0, lowVal = 0, highVal = 255;
-  for (let v = 0; v < 256; v++) {
-    acc += hist[v];
-    if (acc >= lowTarget)  { lowVal = v; break; }
-  }
-  acc = 0;
-  for (let v = 255; v >= 0; v--) {
-    acc += hist[v];
-    if (acc >= (total - highTarget)) { highVal = v; break; }
-  }
-
-  if (highVal <= lowVal) return gray;
-
-  const range = highVal - lowVal;
-  const out = new Uint8Array(gray.length);
-  for (let i = 0; i < gray.length; i++) {
-    let v = ((gray[i] - lowVal) / range) * 255;
-    if (v < 0) v = 0;
-    else if (v > 255) v = 255;
-    out[i] = v;
-  }
-  return out;
-}
-
 function _otsuThreshold(gray) {
   const hist = new Array(256).fill(0);
   for (let i = 0; i < gray.length; i++) hist[gray[i]]++;
@@ -700,6 +668,7 @@ function _binarize(gray, threshold) {
   return out;
 }
 
+// ⭐ v3.2: Bỏ _applyContrast — dùng grayscale gốc (giống v1)
 async function preprocessPass2(rawDataUrl, signal) {
   _checkAborted(signal);
   const img = await loadImage(rawDataUrl);
@@ -707,14 +676,14 @@ async function preprocessPass2(rawDataUrl, signal) {
 
   const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
   const gray    = _toGrayscale(imgData.data);
-  const contrast = _applyContrast(gray, 0.02, 0.98);
-  const threshold = _otsuThreshold(contrast);
-  const bin     = _binarize(contrast, threshold);
+  const threshold = _otsuThreshold(gray);
+  const bin     = _binarize(gray, threshold);
 
   ctx.putImageData(new ImageData(bin, canvas.width, canvas.height), 0, 0);
   return canvas.toDataURL('image/png');
 }
 
+// ⭐ v3.2: Bỏ _applyContrast
 async function preprocessPass3(rawDataUrl, fixedThreshold, signal) {
   _checkAborted(signal);
   const img = await loadImage(rawDataUrl);
@@ -722,8 +691,7 @@ async function preprocessPass3(rawDataUrl, fixedThreshold, signal) {
 
   const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
   const gray    = _toGrayscale(imgData.data);
-  const contrast = _applyContrast(gray, 0.02, 0.98);
-  const bin     = _binarize(contrast, fixedThreshold);
+  const bin     = _binarize(gray, fixedThreshold);
 
   ctx.putImageData(new ImageData(bin, canvas.width, canvas.height), 0, 0);
   return canvas.toDataURL('image/png');
@@ -750,6 +718,7 @@ function computeCardRegions(imgHeight, numCards) {
   return cards;
 }
 
+// ⭐ v3.2: Bỏ _applyContrast
 async function ocrCardNumber(imageSource, card, signal) {
   _checkAborted(signal);
 
@@ -779,9 +748,8 @@ async function ocrCardNumber(imageSource, card, signal) {
 
   const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
   const gray = _toGrayscale(imgData.data);
-  const contrast = _applyContrast(gray, 0.02, 0.98);
-  const threshold = _otsuThreshold(contrast);
-  const bin = _binarize(contrast, threshold);
+  const threshold = _otsuThreshold(gray);
+  const bin = _binarize(gray, threshold);
   ctx.putImageData(new ImageData(bin, canvas.width, canvas.height), 0, 0);
 
   const processedDataUrl = canvas.toDataURL('image/png');
@@ -1034,7 +1002,7 @@ function parseBlockBased(text) {
     }
   });
 
-  // ⭐ v3.1: Ordered fallback — match ranges[i] với allOrderMatches[i]
+  // Ordered fallback
   const allOrderMatches = [];
   const allRe = /(\d{1,6})\s*Đơn\s*hàng/gi;
   let am;
@@ -1232,7 +1200,7 @@ function getTypeLabel(r) {
        : 'Hoàn';
 }
 // =============================================================
-// OCR ENGINE v3.1 — PART 3/3
+// OCR ENGINE v3.2 — PART 3/3
 // Pipeline · Crop Refine · Modals · Batch · Exports
 // =============================================================
 
@@ -1406,7 +1374,7 @@ function buildFinalResult({
   };
 }
 
-// ==================== PROCESS ONE FILE (v3.1 — Pass 1 = Otsu) ====================
+// ==================== PROCESS ONE FILE (v3.2) ====================
 async function processOneFile(file, signal) {
   _checkAborted(signal);
 
@@ -1439,7 +1407,7 @@ async function processOneFile(file, signal) {
   let bestScore  = -1;
   let attempts   = 0;
 
-  // ⭐ v3.1: Pass 1 = Otsu (giống v1) — fallback raw + threshold
+  // Pass 1 = Otsu thuần (không contrast), giống v1
   const passes = [
     { name: 'P0-otsu',       run: () => preprocessPass2(dataUrl, signal) },
     { name: 'P1-raw',        run: () => Promise.resolve(dataUrl) },
@@ -1490,7 +1458,7 @@ async function processOneFile(file, signal) {
     };
   }
 
-  // ===== v3.0: CROP REFINE (chỉ khi checksum fail) =====
+  // Crop refine nếu checksum fail
   let finalParsed = bestBundle.parsed;
   let finalScoreBundle = bestBundle.scoreBundle;
 
@@ -1529,7 +1497,6 @@ async function processOneFile(file, signal) {
       console.warn('[OCR v3] Crop refine error:', e);
     }
   }
-  // ===== /CROP REFINE =====
 
   const result = buildFinalResult({
     parsed:          finalParsed,
