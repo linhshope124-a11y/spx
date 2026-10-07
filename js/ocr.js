@@ -1,6 +1,6 @@
 // =============================================================
-// OCR ENGINE v1-β — Imports · Worker · Preprocess · Parse
-// Nền tảng v1 + timeout + cache LS + cancel
+// OCR ENGINE v1-β.2 — PART 1/2
+// Imports · Config · Worker · Preprocess · Parse
 // =============================================================
 
 import { state } from './state.js';
@@ -11,10 +11,10 @@ import { updateAllViews } from './render.js';
 import { showAlert, showConfirm } from './dialog.js';
 
 // ==================== CONFIG ====================
-const DISABLE_AUTO_SAVE = true;   // ⚠️ TEST: tắt auto-save
+const DISABLE_AUTO_SAVE = true;
 
-const OCR_TIMEOUT_MS    = 30000;
-const OCR_CACHE_VERSION = 'v1b';
+const OCR_TIMEOUT_MS    = 60000;
+const OCR_CACHE_VERSION = 'v1b2';
 const OCR_CACHE_MAX     = 100;
 const LS_CACHE_PREFIX   = 'spx_ocr_ls_';
 const LS_CACHE_INDEX    = 'spx_ocr_ls_index';
@@ -158,7 +158,7 @@ function withTimeout(promise, ms, signal) {
   });
 }
 
-// ==================== OCR RECOGNIZE (timeout + retry) ====================
+// ==================== OCR RECOGNIZE ====================
 async function ocrRecognize(preprocessedDataUrl, signal) {
   _checkAborted(signal);
 
@@ -247,7 +247,7 @@ function otsuThreshold(gray) {
   return threshold;
 }
 
-// ==================== PREPROCESSING (v1 nguyên bản) ====================
+// ==================== PREPROCESSING ====================
 async function preprocessImage(rawDataUrl, options = {}) {
   const { upscale = 2.0, useOtsu = true, threshold = 145 } = options;
   return new Promise((resolve, reject) => {
@@ -285,7 +285,7 @@ async function preprocessImage(rawDataUrl, options = {}) {
   });
 }
 
-// ==================== PHÁT HIỆN TAB (v1) ====================
+// ==================== PHÁT HIỆN TAB ====================
 function detectActiveTabByOrangeLine(imageSource) {
   return new Promise(resolve => {
     const img = new Image();
@@ -356,7 +356,7 @@ function identifyRangeKey(minV, maxV) {
   return null;
 }
 
-// ==================== PARSE (v1 nguyên bản) ====================
+// ==================== PARSE ====================
 function parseOcrText(cleanText) {
   const weights = { '0_2':0,'2_4':0,'4_6':0,'6_8':0,'8_10':0,'10_12':0,'12_15':0,'over_15':0 };
   const confidences = {};
@@ -508,11 +508,12 @@ function extractDate(text) {
   return getTodayIso();
 }
 // =============================================================
-// OCR ENGINE v1-β — Cache LS · Main · Modals · Copy log · Exports
+// OCR ENGINE v1-β.2 — PART 2/2
+// Cache LS · Main · Modals · Copy log v3-style · Exports
 // =============================================================
 
 // ==================== LOG STORAGE ====================
-let _lastOcrLog = '';   // fallback khi DOM không có
+let _lastOcrLog = '';
 
 // ==================== BATCH STATE ====================
 let batchResults = [];
@@ -532,24 +533,33 @@ function buildWeights(r) {
   return w;
 }
 
+// ⭐ FIX: explicit null — không default return
 function getTypeFromResult(r) {
-  return r.detectedColorType === 'del' ? 'delivery'
-       : r.detectedColorType === 'pick' ? 'pickup' : 'return';
+  if (r.detectedColorType === 'del')  return 'delivery';
+  if (r.detectedColorType === 'pick') return 'pickup';
+  if (r.detectedColorType === 'ret')  return 'return';
+  return null;
 }
 
 function getTypeLabel(r) {
-  return r.detectedColorType === 'del' ? 'Giao'
-       : r.detectedColorType === 'pick' ? 'Lấy' : 'Hoàn';
+  if (r.detectedColorType === 'del')  return 'Giao';
+  if (r.detectedColorType === 'pick') return 'Lấy';
+  if (r.detectedColorType === 'ret')  return 'Hoàn';
+  return 'Không rõ';
 }
 
 function findExactDuplicate(r) {
   const type = getTypeFromResult(r);
+  if (!type) return null;
   const weights = buildWeights(r);
   return state.appData[type].find(rec =>
     rec.date === r.parsedDate &&
     WEIGHT_KEYS.every(k => (parseInt(rec.weights[k], 10) || 0) === (parseInt(weights[k], 10) || 0))
   ) || null;
 }
+
+// ⭐ Thumbnail placeholder khi rỗng
+const EMPTY_THUMB = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI1NiIgaGVpZ2h0PSI1NiI+PGRlZnM+PHBhdHRlcm4gaWQ9ImciIHdpZHRoPSIxMCIgaGVpZ2h0PSIxMCIgcGF0dGVyblVuaXRzPSJ1c2VyU3BhY2VPblVzZSI+PHJlY3Qgd2lkdGg9IjUiIGhlaWdodD0iNSIgZmlsbD0iI2U1ZTdlYiIvPjxyZWN0IHg9IjUiIHk9IjUiIHdpZHRoPSI1IiBoZWlnaHQ9IjUiIGZpbGw9IiNlNWU3ZWIiLz48L3BhdHRlcm4+PC9kZWZzPjxyZWN0IHdpZHRoPSI1NiIgaGVpZ2h0PSI1NiIgZmlsbD0idXJsKCNnKSIvPjwvc3ZnPg==';
 
 // ==================== VALIDATE PHÂN BỐ ====================
 function validateDistribution(weights) {
@@ -599,6 +609,9 @@ function validateDistribution(weights) {
 async function tryAutoSave(r) {
   if (DISABLE_AUTO_SAVE) return false;
 
+  const type = getTypeFromResult(r);
+  if (!type) return false;
+
   const confs = Object.values(r.confidences).filter(c => c != null);
   if (confs.length === 0) return false;
   const allHigh = confs.every(c => c >= 85);
@@ -610,7 +623,6 @@ async function tryAutoSave(r) {
   const dist = validateDistribution(r.weights);
   if (!dist.ok) return false;
 
-  const type = getTypeFromResult(r);
   const weights = buildWeights(r);
   const newId = generateId();
 
@@ -631,6 +643,7 @@ async function tryAutoSave(r) {
 
 async function tryAutoSaveForce(r) {
   const type = getTypeFromResult(r);
+  if (!type) return false;
   const weights = buildWeights(r);
   const newId = generateId();
 
@@ -649,7 +662,7 @@ async function tryAutoSaveForce(r) {
   return true;
 }
 
-// ==================== CACHE 2 TẦNG (RAM + localStorage) ====================
+// ==================== CACHE 2 TẦNG ====================
 const ocrCache = new Map();
 
 function _cacheKey(hash) {
@@ -807,8 +820,6 @@ async function hashBlob(file) {
 // ==================== COPY LOG ====================
 export async function copyOcrLog() {
   const debugEl = document.getElementById('ocrDebugText');
-
-  // Ưu tiên: DOM → fallback biến module
   let text = (debugEl && debugEl.innerText) ? debugEl.innerText.trim() : '';
   if (!text) text = (_lastOcrLog || '').trim();
 
@@ -848,42 +859,37 @@ export async function copyOcrLog() {
   }
 }
 
-/**
- * Inject nút "📋 Copy log" vào .ocr-preview-label (cạnh nút Ẩn)
- * Gọi mỗi lần mở modal — chỉ inject 1 lần
- */
+// ⭐ COPY LOG v3-STYLE: chèn cạnh nút "Xem log"
 function injectCopyLogButton() {
-  const label = document.querySelector('#ocrPreviewBox .ocr-preview-label');
-  if (!label) return;
-
-  if (document.getElementById('ocrCopyLogBtn')) return;
-
-  const btn = document.createElement('button');
-  btn.id = 'ocrCopyLogBtn';
-  btn.type = 'button';
-  btn.innerText = '📋 Copy log';
-  btn.style.cssText = `
-    cursor: pointer;
-    padding: 3px 9px;
-    border-radius: 6px;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    color: var(--text-2);
-    font-size: 10px;
-    font-weight: 700;
-    font-family: inherit;
-    margin-right: 6px;
-    transition: all 0.15s;
-  `;
-  btn.onclick = () => copyOcrLog();
-
-  // Chèn TRƯỚC nút Ẩn
-  const hideBtn = label.querySelector('.ocr-hide-btn');
-  if (hideBtn) {
-    label.insertBefore(btn, hideBtn);
-  } else {
-    label.appendChild(btn);
+  const toggleBtn = document.getElementById('ocrDebugToggle');
+  if (!toggleBtn) {
+    console.warn('[OCR] ocrDebugToggle không tồn tại');
+    return;
   }
+
+  const old = document.getElementById('ocrCopyLogBtn');
+  if (old) old.remove();
+
+  const copyBtn = document.createElement('button');
+  copyBtn.id = 'ocrCopyLogBtn';
+  copyBtn.type = 'button';
+  copyBtn.innerText = '📋 Copy log';
+  copyBtn.style.cssText = `
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-3);
+    font-size: 10px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-family: inherit;
+    font-weight: 600;
+    margin-left: 6px;
+  `;
+  copyBtn.onclick = () => copyOcrLog();
+
+  toggleBtn.parentNode.appendChild(copyBtn);
+  console.log('[OCR] Đã inject nút Copy log cạnh Xem log');
 }
 
 // ==================== CANCEL BUTTON ====================
@@ -1030,7 +1036,7 @@ function showSummaryToast(saved, dup, need, delayMs = 0) {
   else fire();
 }
 
-// ==================== PROCESS FILES (v1 pipeline + abort) ====================
+// ==================== PROCESS FILES ====================
 async function processFiles(files, signal) {
   const out = [];
   const statusTitle = document.getElementById('ocrStatusTitle');
@@ -1128,7 +1134,6 @@ export function fillModalFromResult(batchItem) {
 
   const distCheck = validateDistribution(r.weights);
 
-  // Build log text — lưu vào module-level
   const modeStr = r.mode ? `[mode: ${r.mode}]` : '';
   const sumStr = r.expectedTotal !== null
     ? `[Sum: ${r.totalFound} / Total: ${r.expectedTotal} — diff: ${Math.abs(r.expectedTotal - r.totalFound)}]`
@@ -1155,11 +1160,10 @@ export function fillModalFromResult(batchItem) {
 
   applyConfidenceHighlight(r.confidences, r.detectedColorType);
 
-  // ⭐ Inject nút Copy log cạnh nút Ẩn
-  setTimeout(() => injectCopyLogButton(), 50);
+  // ⭐ Inject nút Copy log cạnh "Xem log" (giống v3)
+  setTimeout(() => injectCopyLogButton(), 100);
 
   const typeText = getTypeLabel(r);
-
   let msg = `${typeText} ${formatDateDisplay(r.parsedDate)} · ${r.totalFound} đơn`;
 
   if (r.expectedTotal !== null && r.totalFound !== r.expectedTotal) {
@@ -1247,6 +1251,10 @@ function buildCompareText(ocrW, existingW) {
 export function openCompareModal(batchItem, existingRecord) {
   const r = batchItem.result;
   const type = getTypeFromResult(r);
+  if (!type) {
+    fillModalFromResult(batchItem);
+    return;
+  }
 
   openEditModal(type, existingRecord.id);
 
@@ -1256,7 +1264,7 @@ export function openCompareModal(batchItem, existingRecord) {
     if (previewBox && previewImg && r.fullDataUrl) {
       previewImg.src = r.fullDataUrl;
       previewBox.style.display = 'block';
-      injectCopyLogButton();
+      setTimeout(() => injectCopyLogButton(), 100);
     }
     const cmp = buildCompareText(r.weights, existingRecord.weights);
     const dateStr = formatDateDisplay(r.parsedDate);
@@ -1318,16 +1326,17 @@ function renderBatchList() {
       const distIcon  = !distCheck.ok ? ' 🟠' : '';
       const cacheIcon = item.fromCache ? ' ⚡' : '';
       const type = getTypeFromResult(r);
-      const existing = state.appData[type].find(rec => rec.date === r.parsedDate);
+      const existing = type ? state.appData[type].find(rec => rec.date === r.parsedDate) : null;
       const actionBtn = existing
         ? `<button class="batch-btn batch-btn-compare" onclick="importBatchItem(${idx})">🔍 So sánh</button>`
         : `<button class="batch-btn batch-btn-import" onclick="importBatchItem(${idx})">📝 Nhập</button>`;
       const existingBadge = existing
         ? ` <span style="font-size:9px;padding:1px 6px;border-radius:4px;background:var(--warning-bg);border:1px solid var(--warning-bd);color:var(--warning);font-weight:700">Đã có</span>`
         : '';
+      const thumbSrc = item.thumbnail || EMPTY_THUMB;
       div.className = 'batch-item';
       div.innerHTML = `
-        <img class="batch-thumb" src="${item.thumbnail}" alt="">
+        <img class="batch-thumb" src="${thumbSrc}" alt="">
         <div class="batch-info">
           <div class="batch-title">
             <span class="hist-badge-tag ${typeClass}">${typeLabel}</span>
@@ -1356,7 +1365,7 @@ export function importBatchItem(idx) {
   if (!item || item.error) return;
   const r = item.result;
   const type = getTypeFromResult(r);
-  const existing = state.appData[type].find(rec => rec.date === r.parsedDate);
+  const existing = type ? state.appData[type].find(rec => rec.date === r.parsedDate) : null;
   closeBatchOcrModal();
   if (existing) openCompareModal(item, existing);
   else fillModalFromResult(item);
@@ -1390,7 +1399,9 @@ export async function saveBatchAll() {
   let dupInBatch = 0;
   valid.forEach(item => {
     const r = item.result;
-    const key = getTypeFromResult(r) + '|' + r.parsedDate;
+    const type = getTypeFromResult(r);
+    if (!type) { dupInBatch++; return; }
+    const key = type + '|' + r.parsedDate;
     if (seenInBatch.has(key)) { dupInBatch++; return; }
     seenInBatch.add(key);
     dedupedBatch.push(item);
@@ -1402,6 +1413,8 @@ export async function saveBatchAll() {
   dedupedBatch.forEach(item => {
     const r = item.result;
     const type = getTypeFromResult(r);
+    if (!type) { dupInBatch++; return; }
+
     const existing = state.appData[type].find(rec => rec.date === r.parsedDate);
     if (existing) { dupExisting++; return; }
 
