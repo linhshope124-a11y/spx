@@ -1,6 +1,6 @@
 // =============================================================
-// OCR ENGINE v3.2 — PART 1/3
-// Config · AbortController · Worker · Cache
+// OCR ENGINE v1-β — Imports · Worker · Preprocess · Parse
+// Nền tảng v1 + timeout + cache LS + cancel
 // =============================================================
 
 import { state } from './state.js';
@@ -11,34 +11,14 @@ import { updateAllViews } from './render.js';
 import { showAlert, showConfirm } from './dialog.js';
 
 // ==================== CONFIG ====================
-const OCR_CACHE_VERSION = 'v6';
+const DISABLE_AUTO_SAVE = true;   // ⚠️ TEST: tắt auto-save
+
 const OCR_TIMEOUT_MS    = 30000;
-const OCR_CACHE_MAX     = 200;
-const LS_CACHE_PREFIX   = 'spx_ocr_cache_';
-const LS_CACHE_INDEX    = 'spx_ocr_cache_index';
+const OCR_CACHE_VERSION = 'v1b';
+const OCR_CACHE_MAX     = 100;
+const LS_CACHE_PREFIX   = 'spx_ocr_ls_';
+const LS_CACHE_INDEX    = 'spx_ocr_ls_index';
 const LS_CACHE_MAX_BYTES = 4 * 1024 * 1024;
-
-// ⚠️ TEST MODE: 999 = tắt auto-save. Đổi lại 92 khi test xong!
-const SCORE_AUTO_SAVE = 999;
-const SCORE_REVIEW    = 85;
-const SCORE_MAX_CHECKSUM_FAIL = 84;
-
-// v3.0 — Crop-based config
-const CARD_REGION_TOP_PCT    = 0.22;
-const CARD_REGION_BOTTOM_PCT = 0.92;
-const CARD_NUM_CROP_X1_PCT   = 0.45;
-const CARD_NUM_CROP_X2_PCT   = 0.95;
-const CARD_NUM_CROP_Y1_PCT   = 0.05;
-const CARD_NUM_CROP_Y2_PCT   = 0.50;
-const CARD_NUM_UPSCALE       = 4;
-
-// v3.0 — Debug log (hiện trong ocrDebugText)
-let _lastCropLog = [];
-
-const RANGE_KEY_BY_MIN = {
-  0: '0_2',   2: '2_4',    4: '4_6',    6: '6_8',
-  8: '8_10',  10: '10_12', 12: '12_15', 15: 'over_15'
-};
 
 // ==================== ABORT CONTROLLER ====================
 let _ocrAbortController = null;
@@ -69,14 +49,49 @@ function _clearAbortController(ctrl) {
   }
 }
 
+// ==================== UNDO LOADER ====================
+let _pushUndoFn = null;
+let _pushUndoLoading = null;
+
+async function ensurePushUndo() {
+  if (_pushUndoFn) return _pushUndoFn;
+  if (_pushUndoLoading) return _pushUndoLoading;
+  _pushUndoLoading = (async () => {
+    try {
+      const mod = await import('./undo.js');
+      _pushUndoFn = mod.pushUndo || null;
+      return _pushUndoFn;
+    } catch (e) {
+      console.warn('[OCR] Không load được undo.js:', e);
+      return null;
+    }
+  })();
+  return _pushUndoLoading;
+}
+
+// ==================== STUBS ====================
+export async function handleSharedImage(sharedFiles) {
+  const arr = Array.from(sharedFiles || []);
+  if (arr.length === 0) {
+    showToast('Không nhận được ảnh từ chia sẻ', 'warning', 2500);
+    return;
+  }
+  const images = arr.filter(f => f && f.type && f.type.startsWith('image/'));
+  if (images.length === 0) {
+    showToast('Chia sẻ không chứa ảnh', 'error', 3000);
+    return;
+  }
+  const fakeEvent = { target: { files: images, value: '' } };
+  await handleOcrImage(fakeEvent);
+}
+
 // ==================== TESSERACT WORKER ====================
 let cachedTesseractWorker = null;
-let workerLoadingPromise  = null;
+let workerLoadingPromise = null;
 
 async function getTesseractWorker() {
   if (cachedTesseractWorker) return cachedTesseractWorker;
-  if (workerLoadingPromise)  return workerLoadingPromise;
-
+  if (workerLoadingPromise) return workerLoadingPromise;
   workerLoadingPromise = (async () => {
     const worker = await Tesseract.createWorker('vie', 1, {
       logger: m => {
@@ -87,29 +102,22 @@ async function getTesseractWorker() {
         let text = '';
         if (m.status === 'loading tesseract core')            text = 'Đang tải engine...';
         else if (m.status === 'initializing tesseract')       text = 'Đang khởi tạo...';
-        else if (m.status === 'loading language traineddata') text = `Đang tải tiếng Việt ${Math.round((m.progress||0)*100)}%...`;
+        else if (m.status === 'loading language traineddata') text = `Đang tải tiếng Việt ${Math.round((m.progress || 0) * 100)}%...`;
         else if (m.status === 'initializing api')             text = 'Đang chuẩn bị API...';
-        else if (m.status === 'recognizing text')             text = `Đang nhận diện... ${Math.round((m.progress||0)*100)}%`;
+        else if (m.status === 'recognizing text')             text = `Đang nhận diện... ${Math.round((m.progress || 0) * 100)}%`;
         if (text) desc.innerText = text;
       }
     });
-
     await worker.setParameters({
       tessedit_pageseg_mode: Tesseract.PSM.SINGLE_BLOCK,
       preserve_interword_spaces: '1',
       tessedit_do_invert: '0'
     });
-
     cachedTesseractWorker = worker;
     return worker;
   })();
-
-  try {
-    return await workerLoadingPromise;
-  } catch (e) {
-    workerLoadingPromise = null;
-    throw e;
-  }
+  try { return await workerLoadingPromise; }
+  catch (e) { workerLoadingPromise = null; throw e; }
 }
 
 async function resetTesseractWorker() {
@@ -117,16 +125,12 @@ async function resetTesseractWorker() {
     try { await cachedTesseractWorker.terminate(); } catch {}
   }
   cachedTesseractWorker = null;
-  workerLoadingPromise  = null;
+  workerLoadingPromise = null;
 }
 
 export async function preloadTesseractWorker() {
-  try {
-    await getTesseractWorker();
-    console.log('[OCR] Worker sẵn sàng');
-  } catch (e) {
-    console.warn('[OCR] Preload thất bại:', e);
-  }
+  try { await getTesseractWorker(); console.log('[OCR] Worker sẵn sàng'); }
+  catch (e) { console.warn('[OCR] Preload thất bại:', e); }
 }
 
 // ==================== TIMEOUT WRAPPER ====================
@@ -154,7 +158,7 @@ function withTimeout(promise, ms, signal) {
   });
 }
 
-// ==================== OCR RECOGNIZE ====================
+// ==================== OCR RECOGNIZE (timeout + retry) ====================
 async function ocrRecognize(preprocessedDataUrl, signal) {
   _checkAborted(signal);
 
@@ -191,229 +195,7 @@ async function ocrRecognize(preprocessedDataUrl, signal) {
   }
 }
 
-// ==================== HASH BLOB ====================
-async function hashBlob(file) {
-  try {
-    const buf = await file.arrayBuffer();
-    const hashBuf = await crypto.subtle.digest('SHA-256', buf);
-    return Array.from(new Uint8Array(hashBuf))
-      .map(b => b.toString(16).padStart(2, '0')).join('');
-  } catch {
-    return 'fb_' + Date.now().toString(16) + '_' + file.size + '_' +
-           (file.name || '').length + '_' + (file.lastModified || 0);
-  }
-}
-
-// ==================== CACHE 2 TẦNG ====================
-const ocrCache = new Map();
-
-function _cacheKey(hash) {
-  return `${OCR_CACHE_VERSION}_${hash}`;
-}
-
-function readCacheIndex() {
-  try {
-    const raw = localStorage.getItem(LS_CACHE_INDEX);
-    if (!raw) return [];
-    const arr = JSON.parse(raw);
-    return Array.isArray(arr) ? arr : [];
-  } catch {
-    return [];
-  }
-}
-
-function writeCacheIndex(index) {
-  try {
-    localStorage.setItem(LS_CACHE_INDEX, JSON.stringify(index));
-  } catch (e) {
-    console.warn('[OCR Cache] Ghi index thất bại:', e.message);
-  }
-}
-
-function estimateLocalStorageBytes() {
-  try {
-    let total = 0;
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (!key || !key.startsWith(LS_CACHE_PREFIX)) continue;
-      const val = localStorage.getItem(key);
-      if (val) total += key.length + val.length;
-    }
-    return total * 2;
-  } catch {
-    return 0;
-  }
-}
-
-function evictOldestCache() {
-  const index = readCacheIndex();
-  if (index.length === 0) return false;
-  const oldest = index.shift();
-  try { localStorage.removeItem(LS_CACHE_PREFIX + oldest); } catch {}
-  writeCacheIndex(index);
-  ocrCache.delete(oldest);
-  return true;
-}
-
-function pruneCacheIfNeeded() {
-  const index = readCacheIndex();
-  const targetCount = Math.floor(OCR_CACHE_MAX * 0.8);
-  let removedCount = 0;
-
-  while (index.length > targetCount) {
-    const oldest = index.shift();
-    try { localStorage.removeItem(LS_CACHE_PREFIX + oldest); } catch {}
-    ocrCache.delete(oldest);
-    removedCount++;
-  }
-  if (removedCount > 0) writeCacheIndex(index);
-
-  let bytes = estimateLocalStorageBytes();
-  const targetBytes = LS_CACHE_MAX_BYTES * 0.5;
-  let safety = 100;
-  while (bytes > targetBytes && safety-- > 0) {
-    if (!evictOldestCache()) break;
-    bytes = estimateLocalStorageBytes();
-  }
-}
-
-function cacheGet(hash) {
-  const key = _cacheKey(hash);
-
-  if (ocrCache.has(key)) {
-    const v = ocrCache.get(key);
-    const index = readCacheIndex();
-    const idx = index.indexOf(key);
-    if (idx !== -1) {
-      index.splice(idx, 1);
-      index.push(key);
-      writeCacheIndex(index);
-    }
-    return v;
-  }
-
-  try {
-    const raw = localStorage.getItem(LS_CACHE_PREFIX + key);
-    if (raw) {
-      const value = JSON.parse(raw);
-      ocrCache.set(key, value);
-
-      const index = readCacheIndex();
-      const idx = index.indexOf(key);
-      if (idx !== -1) {
-        index.splice(idx, 1);
-        index.push(key);
-        writeCacheIndex(index);
-      }
-      return value;
-    }
-  } catch (e) {
-    console.warn('[OCR Cache] Đọc localStorage lỗi:', e.message);
-  }
-
-  return null;
-}
-
-function cacheSet(hash, value) {
-  const key = _cacheKey(hash);
-  ocrCache.set(key, value);
-
-  try {
-    localStorage.setItem(LS_CACHE_PREFIX + key, JSON.stringify(value));
-    const index = readCacheIndex();
-    if (!index.includes(key)) {
-      index.push(key);
-      writeCacheIndex(index);
-    }
-    pruneCacheIfNeeded();
-  } catch (e) {
-    console.warn('[OCR Cache] Ghi localStorage lỗi:', e.message);
-    try {
-      pruneCacheIfNeeded();
-      localStorage.setItem(LS_CACHE_PREFIX + key, JSON.stringify(value));
-    } catch (e2) {
-      console.warn('[OCR Cache] Vẫn không ghi được:', e2.message);
-    }
-  }
-}
-
-// ==================== XÓA CACHE OCR ====================
-export async function clearOcrCache() {
-  const ok = await showConfirm(
-    'Xóa toàn bộ cache OCR?\n\n' +
-    'Lần sau quét lại ảnh cũ sẽ phải OCR từ đầu (chậm hơn).\n' +
-    'Dữ liệu sản lượng đã lưu vẫn giữ nguyên.',
-    {
-      title: '🗑️ Xóa cache OCR',
-      okText: 'Xóa cache',
-      cancelText: 'Hủy',
-      danger: true
-    }
-  );
-  if (!ok) return 0;
-
-  let count = 0;
-  ocrCache.clear();
-
-  try {
-    const index = readCacheIndex();
-    count = index.length;
-    index.forEach(key => {
-      try { localStorage.removeItem(LS_CACHE_PREFIX + key); } catch {}
-    });
-    localStorage.removeItem(LS_CACHE_INDEX);
-  } catch (e) {
-    console.warn('[OCR Cache] Xóa lỗi:', e.message);
-  }
-
-  try {
-    let actualCount = 0;
-    const toRemove = [];
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (key && key.startsWith(LS_CACHE_PREFIX)) {
-        toRemove.push(key);
-        actualCount++;
-      }
-    }
-    toRemove.forEach(k => { try { localStorage.removeItem(k); } catch {} });
-    count = Math.max(count, actualCount);
-  } catch {}
-
-  showToast(`Đã xóa ${count} cache OCR`, 'success', 2500);
-  return count;
-}
-
-// ==================== THỐNG KÊ CACHE ====================
-export function getOcrCacheStats() {
-  const index = readCacheIndex();
-  const ramCount = ocrCache.size;
-  const lsCount  = index.length;
-  const bytes    = estimateLocalStorageBytes();
-  return {
-    ramEntries: ramCount,
-    lsEntries:  lsCount,
-    sizeKB:     Math.round(bytes / 1024),
-    maxEntries: OCR_CACHE_MAX,
-    maxSizeKB:  Math.round(LS_CACHE_MAX_BYTES / 1024)
-  };
-}
-// =============================================================
-// OCR ENGINE v3.2 — PART 2/3
-// Image · Tab Detect · Card Crop · Preprocess · Parser · Validation · Scoring
-// =============================================================
-
-// ==================== IMAGE HELPERS ====================
-function loadImage(src) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => resolve(img);
-    img.onerror = () => reject(new Error('Không load được ảnh'));
-    img.src = src;
-  });
-}
-
+// ==================== HELPERS ====================
 function readFileAsDataURL(file) {
   return new Promise((resolve, reject) => {
     const r = new FileReader();
@@ -428,7 +210,7 @@ function makeThumbnail(dataUrl, maxW = 96) {
     const img = new Image();
     img.onload = () => {
       try {
-        const scale = Math.min(1, maxW / img.width);
+        const scale  = Math.min(1, maxW / img.width);
         const canvas = document.createElement('canvas');
         canvas.width  = Math.floor(img.width * scale);
         canvas.height = Math.floor(img.height * scale);
@@ -442,211 +224,20 @@ function makeThumbnail(dataUrl, maxW = 96) {
   });
 }
 
-// ==================== DETECT ACTIVE TAB ====================
-const TAB_MIN_CONFIDENCE = 60;
-
-const FALLBACK_ZONES = [
-  { type: 'del',  min: 0.00, max: 0.30 },
-  { type: 'pick', min: 0.30, max: 0.50 },
-  { type: 'ret',  min: 0.50, max: 1.00 }
-];
-
-function detectActiveTab(imageSource) {
-  return new Promise(resolve => {
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => {
-      try {
-        const canvas = document.createElement('canvas');
-        canvas.width  = img.width;
-        canvas.height = img.height;
-        const ctx = canvas.getContext('2d', { willReadFrequently: true });
-        ctx.drawImage(img, 0, 0);
-
-        const tabY1 = Math.floor(img.height * 0.09);
-        const tabY2 = Math.floor(img.height * 0.145);
-        const tabH  = Math.max(1, tabY2 - tabY1);
-
-        const tabData = ctx.getImageData(0, tabY1, img.width, tabH).data;
-
-        const darkCount = new Array(img.width).fill(0);
-        for (let y = 0; y < tabH; y++) {
-          for (let x = 0; x < img.width; x++) {
-            const idx = (y * img.width + x) * 4;
-            const r = tabData[idx], g = tabData[idx+1], b = tabData[idx+2];
-            const gray = 0.299*r + 0.587*g + 0.114*b;
-            if (gray < 120) darkCount[x]++;
-          }
-        }
-
-        const MIN_DARK = 3;
-        const clusters = [];
-        let clusterStart = -1;
-        for (let x = 0; x < img.width; x++) {
-          if (darkCount[x] >= MIN_DARK) {
-            if (clusterStart === -1) clusterStart = x;
-          } else {
-            if (clusterStart !== -1) {
-              clusters.push({ start: clusterStart, end: x - 1 });
-              clusterStart = -1;
-            }
-          }
-        }
-        if (clusterStart !== -1) {
-          clusters.push({ start: clusterStart, end: img.width - 1 });
-        }
-
-        const merged = [];
-        clusters.forEach(c => {
-          if (merged.length > 0 && c.start - merged[merged.length-1].end < 20) {
-            merged[merged.length-1].end = c.end;
-          } else {
-            merged.push({ start: c.start, end: c.end });
-          }
-        });
-
-        const tabCandidates = merged.filter(c => (c.end - c.start) >= 30);
-
-        const camY1 = Math.floor(img.height * 0.12);
-        const camY2 = Math.floor(img.height * 0.18);
-        const camH  = Math.max(1, camY2 - camY1);
-
-        const camData = ctx.getImageData(0, camY1, img.width, camH).data;
-        const colOrange = new Array(img.width).fill(0);
-        let totalOrange = 0;
-        for (let y = 0; y < camH; y++) {
-          for (let x = 0; x < img.width; x++) {
-            const idx = (y * img.width + x) * 4;
-            const r = camData[idx], g = camData[idx+1], b = camData[idx+2];
-            if (r > 180 && g >= 40 && g <= 155 && b <= 90 && (r - g) > 45) {
-              colOrange[x]++;
-              totalOrange++;
-            }
-          }
-        }
-
-        if (totalOrange < 30) { resolve(null); return; }
-
-        const winSize = 40;
-        let maxSum = 0, bestCenter = 0;
-        for (let x = 0; x < img.width; x++) {
-          let sum = 0;
-          const l = Math.max(0, x - winSize);
-          const r = Math.min(img.width - 1, x + winSize);
-          for (let k = l; k <= r; k++) sum += colOrange[k];
-          if (sum > maxSum) { maxSum = sum; bestCenter = x; }
-        }
-
-        if (tabCandidates.length >= 3) {
-          const sorted = [...tabCandidates]
-            .sort((a, b) => (b.end - b.start) - (a.end - a.start))
-            .slice(0, 3)
-            .sort((a, b) => a.start - b.start);
-
-          const TAB_ORDER = ['del', 'pick', 'ret'];
-
-          let bestIdx = -1;
-          let bestDist = Infinity;
-          let secondDist = Infinity;
-
-          sorted.forEach((c, i) => {
-            const center = (c.start + c.end) / 2;
-            const dist = Math.abs(bestCenter - center);
-            if (dist < bestDist) {
-              secondDist = bestDist;
-              bestDist = dist;
-              bestIdx = i;
-            } else if (dist < secondDist) {
-              secondDist = dist;
-            }
-          });
-
-          if (bestIdx >= 0) {
-            const width = img.width;
-            const relativeDist = bestDist / width;
-            const separation   = (secondDist - bestDist) / width;
-
-            let conf = 100;
-            conf -= Math.min(40, relativeDist * 300);
-            conf -= Math.max(0, 30 - separation * 500);
-            const confidence = Math.max(0, Math.min(100, Math.round(conf)));
-
-            if (confidence >= TAB_MIN_CONFIDENCE) {
-              resolve({
-                type: TAB_ORDER[bestIdx],
-                confidence,
-                method: 'tab-cluster'
-              });
-              return;
-            }
-          }
-        }
-
-        const rel = bestCenter / img.width;
-        let fallbackType = null;
-        for (const z of FALLBACK_ZONES) {
-          if (rel >= z.min && rel < z.max) { fallbackType = z.type; break; }
-        }
-        if (!fallbackType) fallbackType = 'del';
-
-        const fallbackConf = 65;
-        if (fallbackConf < TAB_MIN_CONFIDENCE) { resolve(null); return; }
-
-        resolve({
-          type: fallbackType,
-          confidence: fallbackConf,
-          method: 'zone-fallback'
-        });
-      } catch (err) {
-        console.warn('[OCR] detectActiveTab error:', err);
-        resolve(null);
-      }
-    };
-    img.onerror = () => resolve(null);
-    img.src = imageSource;
-  });
-}
-
-// ==================== PREPROCESS ====================
-function _drawToCanvas(img, scale) {
-  const s = Math.min(4, Math.max(1, scale));
-  const canvas = document.createElement('canvas');
-  canvas.width  = Math.floor(img.width  * s);
-  canvas.height = Math.floor(img.height * s);
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  ctx.imageSmoothingEnabled = true;
-  ctx.imageSmoothingQuality = 'high';
-  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-  return { canvas, ctx, width: canvas.width, height: canvas.height };
-}
-
-function _toGrayscale(data) {
-  const gray = new Uint8Array(data.length / 4);
-  for (let i = 0, j = 0; i < data.length; i += 4, j++) {
-    gray[j] = Math.round(
-      data[i] * 0.299 + data[i+1] * 0.587 + data[i+2] * 0.114
-    );
-  }
-  return gray;
-}
-
-function _otsuThreshold(gray) {
+// ==================== OTSU ====================
+function otsuThreshold(gray) {
   const hist = new Array(256).fill(0);
   for (let i = 0; i < gray.length; i++) hist[gray[i]]++;
-
   const total = gray.length;
   let sum = 0;
   for (let i = 0; i < 256; i++) sum += i * hist[i];
-
   let sumB = 0, wB = 0, wF = 0;
   let maxVar = 0, threshold = 128;
-
   for (let t = 0; t < 256; t++) {
     wB += hist[t];
     if (wB === 0) continue;
     wF = total - wB;
     if (wF === 0) break;
-
     sumB += t * hist[t];
     const mB = sumB / wB;
     const mF = (sum - sumB) / wF;
@@ -656,527 +247,282 @@ function _otsuThreshold(gray) {
   return threshold;
 }
 
-function _binarize(gray, threshold) {
-  const out = new Uint8ClampedArray(gray.length * 4);
-  for (let i = 0, j = 0; i < gray.length; i++, j += 4) {
-    const val = gray[i] > threshold ? 255 : 0;
-    out[j]   = val;
-    out[j+1] = val;
-    out[j+2] = val;
-    out[j+3] = 255;
-  }
-  return out;
-}
+// ==================== PREPROCESSING (v1 nguyên bản) ====================
+async function preprocessImage(rawDataUrl, options = {}) {
+  const { upscale = 2.0, useOtsu = true, threshold = 145 } = options;
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      try {
+        const scale = Math.min(4, upscale);
+        const canvas = document.createElement('canvas');
+        canvas.width  = Math.floor(img.width  * scale);
+        canvas.height = Math.floor(img.height * scale);
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
-// ⭐ v3.2: Bỏ _applyContrast — dùng grayscale gốc (giống v1)
-async function preprocessPass2(rawDataUrl, signal) {
-  _checkAborted(signal);
-  const img = await loadImage(rawDataUrl);
-  const { ctx, canvas } = _drawToCanvas(img, 2.0);
-
-  const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  const gray    = _toGrayscale(imgData.data);
-  const threshold = _otsuThreshold(gray);
-  const bin     = _binarize(gray, threshold);
-
-  ctx.putImageData(new ImageData(bin, canvas.width, canvas.height), 0, 0);
-  return canvas.toDataURL('image/png');
-}
-
-// ⭐ v3.2: Bỏ _applyContrast
-async function preprocessPass3(rawDataUrl, fixedThreshold, signal) {
-  _checkAborted(signal);
-  const img = await loadImage(rawDataUrl);
-  const { ctx, canvas } = _drawToCanvas(img, 2.5);
-
-  const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  const gray    = _toGrayscale(imgData.data);
-  const bin     = _binarize(gray, fixedThreshold);
-
-  ctx.putImageData(new ImageData(bin, canvas.width, canvas.height), 0, 0);
-  return canvas.toDataURL('image/png');
-}
-
-// ==================== v3.0: CARD DETECTION + CROP ====================
-function computeCardRegions(imgHeight, numCards) {
-  if (!Number.isFinite(numCards) || numCards < 1 || numCards > 8) return [];
-
-  const startY = Math.floor(imgHeight * CARD_REGION_TOP_PCT);
-  const endY   = Math.floor(imgHeight * CARD_REGION_BOTTOM_PCT);
-  const totalH = endY - startY;
-  const cardH  = Math.floor(totalH / numCards);
-
-  const cards = [];
-  for (let i = 0; i < numCards; i++) {
-    cards.push({
-      top: startY + i * cardH,
-      bottom: startY + (i + 1) * cardH,
-      height: cardH,
-      idx: i
-    });
-  }
-  return cards;
-}
-
-// ⭐ v3.2: Bỏ _applyContrast
-async function ocrCardNumber(imageSource, card, signal) {
-  _checkAborted(signal);
-
-  const img = await loadImage(imageSource);
-  const canvas = document.createElement('canvas');
-
-  const cardH = card.height;
-
-  const cropY1 = card.top + Math.floor(cardH * CARD_NUM_CROP_Y1_PCT);
-  const cropY2 = card.top + Math.floor(cardH * CARD_NUM_CROP_Y2_PCT);
-  const cropX1 = Math.floor(img.width * CARD_NUM_CROP_X1_PCT);
-  const cropX2 = Math.floor(img.width * CARD_NUM_CROP_X2_PCT);
-
-  const cropW = cropX2 - cropX1;
-  const cropH = cropY2 - cropY1;
-
-  if (cropW < 20 || cropH < 10) return null;
-
-  const scale = CARD_NUM_UPSCALE;
-  canvas.width  = cropW * scale;
-  canvas.height = cropH * scale;
-
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  ctx.imageSmoothingEnabled = true;
-  ctx.imageSmoothingQuality = 'high';
-  ctx.drawImage(img, cropX1, cropY1, cropW, cropH, 0, 0, canvas.width, canvas.height);
-
-  const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  const gray = _toGrayscale(imgData.data);
-  const threshold = _otsuThreshold(gray);
-  const bin = _binarize(gray, threshold);
-  ctx.putImageData(new ImageData(bin, canvas.width, canvas.height), 0, 0);
-
-  const processedDataUrl = canvas.toDataURL('image/png');
-
-  _checkAborted(signal);
-
-  const text = await ocrRecognize(processedDataUrl, signal);
-  const cleanText = text.trim().replace(/\n/g, ' | ');
-  console.log(`[OCR v3] Card ${card.idx}: "${cleanText}"`);
-
-  const m = text.match(/\d{1,6}/);
-  if (!m) return null;
-
-  const num = parseInt(m[0], 10);
-  if (!Number.isFinite(num) || num < 0 || num > 99999) return null;
-
-  return num;
-}
-// ==================== /CARD DETECTION + CROP ====================
-
-
-// ==================== PARSE ====================
-function fixWeightRanges(text) {
-  const RANGE_CHAR = '[0-9OoQlI|ZzSsGB]';
-  const pattern = new RegExp(
-    `(${RANGE_CHAR})\\s*([.,])\\s*(${RANGE_CHAR})(${RANGE_CHAR})(${RANGE_CHAR})` +
-    `\\s*[-–—]\\s*` +
-    `(${RANGE_CHAR})\\s*([.,])\\s*(${RANGE_CHAR})(${RANGE_CHAR})(${RANGE_CHAR})`,
-    'g'
-  );
-
-  const fixChar = (c) => {
-    switch (c) {
-      case 'O': case 'o': case 'Q': return '0';
-      case 'l': case 'I': case '|': return '1';
-      case 'Z': case 'z': return '2';
-      case 'S': case 's': return '5';
-      case 'G': return '6';
-      case 'B': return '8';
-      default:  return c;
-    }
-  };
-
-  const fixGroup = (str) => str.split('').map(fixChar).join('');
-
-  return text.replace(pattern, (match, a, dot1, b, c, d, e, dot2, f, g, h) => {
-    const left  = `${fixChar(a)}.${fixGroup(b + c + d)}`;
-    const right = `${fixChar(e)}.${fixGroup(f + g + h)}`;
-    return `${left} - ${right}`;
+        const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const data = imgData.data;
+        const gray = new Uint8Array(data.length / 4);
+        for (let i = 0, j = 0; i < data.length; i += 4, j++) {
+          gray[j] = Math.round(data[i] * 0.299 + data[i+1] * 0.587 + data[i+2] * 0.114);
+        }
+        const th = useOtsu ? otsuThreshold(gray) : threshold;
+        for (let i = 0, j = 0; i < data.length; i += 4, j++) {
+          const val = gray[j] > th ? 255 : 0;
+          data[i] = data[i+1] = data[i+2] = val;
+          data[i+3] = 255;
+        }
+        ctx.putImageData(imgData, 0, 0);
+        resolve({ dataUrl: canvas.toDataURL('image/png'), width: canvas.width, height: canvas.height });
+      } catch (e) { reject(e); }
+    };
+    img.onerror = () => reject(new Error('Image load failed'));
+    img.src = rawDataUrl;
   });
 }
 
-function normalizeOcrText(text) {
-  return fixWeightRanges(text)
-    .replace(/[–—−]/g, '-')
-    .replace(/(\d),(\d)/g, '$1.$2')
-    .replace(/¡/g, '1')
-    .replace(/\bO(\d)/g, '0$1')
-    .replace(/(\d)O\b/g, '$10')
-
-    .replace(/(Ì|Í|I|l|\|)(\s*)(?=Đơn\s*hàng)/gi, '1$2')
-
-    .replace(/(\d+)\s*[đĐ][ơơọo]nh(?=\d)/gi, '$1 Đơn hàng ')
-
-    .replace(/([Zz])(\s*)(?=Đơn\s*hàng)/g, '2$2')
-    .replace(/([Ss])(\s*)(?=Đơn\s*hàng)/g, '5$2')
-    .replace(/([OoQ])(\s*)(?=Đơn\s*hàng)/g, '0$2')
-    .replace(/([G])(\s*)(?=Đơn\s*hàng)/g, '6$2')
-    .replace(/([gq])(\s*)(?=Đơn\s*hàng)/g, '9$2')
-    .replace(/([Bb])(\s*)(?=Đơn\s*hàng)/g, '8$2')
-    .replace(/([AH])(\s*)(?=Đơn\s*hàng)/g, '4$2')
-    .replace(/([T])(\s*)(?=Đơn\s*hàng)/g, '7$2')
-
-    .replace(/[đĐ]g[ïi]n?h?/gi, 'Đơn hàng')
-    .replace(/[đĐ][ơơọo]g[ïi]/gi, 'Đơn hàng')
-
-    .replace(/[đĐ][ơơọo]n\s*h[àaàáạảãêềếệểễ]ng?/gi, 'Đơn hàng')
-    .replace(/[đĐ][ơơọo]n\s*h[ềếệểễ]\b/gi, 'Đơn hàng')
-    .replace(/[đĐ][ơơọo]n\s*h\b/gi, 'Đơn hàng')
-    .replace(/[đĐ][ơơọo]nh(?=\d|\s|$)/gi, 'Đơn hàng')
-    .replace(/[đĐ]nh(?=\d|\s|$)/gi, 'Đơn hàng')
-    .replace(/[đĐ]n\s*h[àa]ng/gi, 'Đơn hàng')
-    .replace(/[đĐ]n\s*h\b/gi, 'Đơn hàng')
-    .replace(/\bDon\s*hang?/gi, 'Đơn hàng')
-    .replace(/\bDon\s*h\b/gi, 'Đơn hàng')
-    .replace(/\bHH\s+X\b/gi, 'Đơn hàng')
-    .replace(/\bHH\s+I\b/gi, 'Đơn hàng')
-    .replace(/\bnhang\b/gi, 'Đơn hàng')
-    .replace(/\bơn\s+hàng\b/gi, 'Đơn hàng')
-
-    .replace(/[ \t]+/g, ' ')
-    .split('\n')
-    .filter(line => !/\b\d{1,2}:\d{2}\b/.test(line))
-    .join('\n');
+// ==================== PHÁT HIỆN TAB (v1) ====================
+function detectActiveTabByOrangeLine(imageSource) {
+  return new Promise(resolve => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.width; canvas.height = img.height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0);
+        const scanHeight = Math.floor(img.height * 0.20);
+        const imgData = ctx.getImageData(0, 0, img.width, scanHeight);
+        const data = imgData.data;
+        const colCount = new Array(img.width).fill(0);
+        let totalOrange = 0;
+        for (let y = 0; y < scanHeight; y++) {
+          for (let x = 0; x < img.width; x++) {
+            const idx = (y * img.width + x) * 4;
+            const r = data[idx], g = data[idx+1], b = data[idx+2];
+            if (r > 180 && g >= 40 && g <= 155 && b <= 90 && (r - g) > 45) { colCount[x]++; totalOrange++; }
+          }
+        }
+        if (totalOrange < 20) { resolve(null); return; }
+        const winSize = 40;
+        let maxSum = 0, bestCenter = 0;
+        for (let x = 0; x < img.width; x++) {
+          let sum = 0;
+          const l = Math.max(0, x - winSize);
+          const r = Math.min(img.width - 1, x + winSize);
+          for (let k = l; k <= r; k++) sum += colCount[k];
+          if (sum > maxSum) { maxSum = sum; bestCenter = x; }
+        }
+        const rel = bestCenter / img.width;
+        if (rel < 0.25) resolve('del');
+        else if (rel < 0.42) resolve('pick');
+        else resolve('ret');
+      } catch { resolve(null); }
+    };
+    img.onerror = () => resolve(null);
+    img.src = imageSource;
+  });
 }
 
-function extractTotal(text) {
-  const patterns = [
-    /Tổng\s*[:\-]?\s*(\d{1,6})\s*Đơn\s*hàng/i,
-    /Tong\s*[:\-]?\s*(\d{1,6})\s*Don\s*hang/i,
-    /Tổng\s*[:\-]?\s*(\d{1,6})/i
-  ];
-  for (const p of patterns) {
-    const m = text.match(p);
-    if (m) {
-      const n = parseInt(m[1], 10);
-      if (Number.isFinite(n) && n > 0 && n < 100000) return n;
-    }
+// ==================== RANGE DEFS ====================
+const RANGE_DEFS = [
+  { key: '0_2',     min: 0,  max: 2 },
+  { key: '2_4',     min: 2,  max: 4 },
+  { key: '4_6',     min: 4,  max: 6 },
+  { key: '6_8',     min: 6,  max: 8 },
+  { key: '8_10',    min: 8,  max: 10 },
+  { key: '10_12',   min: 10, max: 12 },
+  { key: '12_15',   min: 12, max: 15 },
+  { key: 'over_15', min: 15, max: 999 }
+];
+
+function identifyRangeKey(minV, maxV) {
+  for (const d of RANGE_DEFS) {
+    if (d.min === minV && d.max === maxV) return d.key;
   }
+  if (minV === 0)  return '0_2';
+  if (minV === 2)  return '2_4';
+  if (minV === 4)  return '4_6';
+  if (minV === 6)  return '6_8';
+  if (minV === 8)  return '8_10';
+  if (minV === 10) return '10_12';
+  if (minV === 12) return '12_15';
+  if (minV === 15) return 'over_15';
   return null;
 }
 
-function extractDate(text) {
-  const clean = text.replace(/,/g, '.');
+// ==================== PARSE (v1 nguyên bản) ====================
+function parseOcrText(cleanText) {
+  const weights = { '0_2':0,'2_4':0,'4_6':0,'6_8':0,'8_10':0,'10_12':0,'12_15':0,'over_15':0 };
+  const confidences = {};
+  const text = cleanText
+    .replace(/[–—]/g, '-')
+    .replace(/,/g, '.')
+    .replace(/¡/g, '1')
+    .split('\n')
+    .filter(line => !/\b\d{1,2}:\d{2}\b/.test(line))
+    .join('\n');
 
-  const fullMatch = clean.match(/(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4}|\d{2})/);
+  const totalRegex = /T[oôổ]ng\s*[:\-]?\s*(\d{1,6})/i;
+  const totalMatch = text.match(totalRegex);
+  let expectedTotal = totalMatch ? parseInt(totalMatch[1], 10) : null;
+  if (!Number.isFinite(expectedTotal)) expectedTotal = null;
+
+  const rangeRegex = /(\d{1,3})(?:[.,]\d{1,3})?\s*[-–~]\s*(\d{1,6})(?:[.,]\d{1,3})?/g;
+  const ranges = [];
+  let m;
+  while ((m = rangeRegex.exec(text)) !== null) {
+    const minV = parseInt(m[1], 10);
+    const maxV = parseInt(m[2], 10);
+    const key = identifyRangeKey(minV, maxV);
+    if (key) ranges.push({ key, pos: m.index, endPos: m.index + m[0].length });
+  }
+  ranges.sort((a, b) => a.pos - b.pos);
+
+  const totalPos = totalMatch ? totalMatch.index : -1;
+  const totalEnd = totalMatch ? totalMatch.index + totalMatch[0].length : -1;
+
+  const numRegex = /\d{1,6}/g;
+  const nums = [];
+  while ((m = numRegex.exec(text)) !== null) {
+    const val = parseInt(m[0], 10);
+    const pos = m.index;
+    const endPos = pos + m[0].length;
+    if (ranges.some(r => pos < r.endPos && endPos > r.pos)) continue;
+    if (totalPos >= 0 && pos >= totalPos && pos <= totalEnd + 3) continue;
+    if (val === 0) continue;
+    if (val > 99999) continue;
+    nums.push({ value: val, pos, endPos });
+  }
+  nums.sort((a, b) => a.pos - b.pos);
+
+  function distanceMatch(mode) {
+    const result = {};
+    const used = new Set();
+    ranges.forEach(r => {
+      let best = null, bestDist = 9999;
+      nums.forEach((n, idx) => {
+        if (used.has(idx)) return;
+        let dist;
+        if (mode === 'before') {
+          if (n.endPos > r.pos) return;
+          dist = r.pos - n.endPos;
+        } else if (mode === 'after') {
+          if (n.pos < r.endPos) return;
+          dist = n.pos - r.endPos;
+        } else {
+          dist = Math.min(
+            Math.abs(n.pos - r.pos),
+            Math.abs(n.endPos - r.endPos)
+          );
+        }
+        if (dist < bestDist && dist < 800) {
+          bestDist = dist;
+          best = { idx, value: n.value };
+        }
+      });
+      if (best) { result[r.key] = best.value; used.add(best.idx); }
+    });
+    return result;
+  }
+
+  const orderedResult = {};
+  for (let i = 0; i < ranges.length && i < nums.length; i++) {
+    orderedResult[ranges[i].key] = nums[i].value;
+  }
+
+  const sumOf = r => Object.values(r).reduce((a, b) => a + b, 0);
+  const countOf = r => Object.keys(r).length;
+
+  const mClosest = distanceMatch('closest');
+  const mBefore  = distanceMatch('before');
+  const mAfter   = distanceMatch('after');
+
+  const candidates = [
+    { name: 'ordered', res: orderedResult, cnt: countOf(orderedResult) },
+    { name: 'closest', res: mClosest,      cnt: countOf(mClosest) },
+    { name: 'before',  res: mBefore,       cnt: countOf(mBefore) },
+    { name: 'after',   res: mAfter,        cnt: countOf(mAfter) }
+  ];
+
+  candidates.forEach(c => {
+    c.diff = expectedTotal !== null ? Math.abs(sumOf(c.res) - expectedTotal) : 0;
+  });
+  candidates.sort((a, b) => {
+    if (a.diff !== b.diff) return a.diff - b.diff;
+    return b.cnt - a.cnt;
+  });
+
+  const best = candidates[0];
+  let baseConf = 88;
+  if (best.diff === 0) baseConf = 95;
+  else if (best.diff <= 2) baseConf = 92;
+
+  Object.keys(best.res).forEach(k => {
+    weights[k] = best.res[k];
+    confidences[k] = baseConf;
+  });
+
+  const totalFound = Object.values(weights).reduce((a, b) => a + b, 0);
+  return { weights, confidences, expectedTotal, totalFound, mode: best.name };
+}
+
+// ==================== EXTRACT DATE ====================
+function extractDate(text) {
+  const cleanText = text.replace(/,/g, '.');
+
+  const fullMatch = cleanText.match(/(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4}|\d{2})/);
   if (fullMatch) {
     const day = parseInt(fullMatch[1], 10);
     const month = parseInt(fullMatch[2], 10);
     let year = parseInt(fullMatch[3], 10);
     if (year < 100) year += 2000;
-    if (day >= 1 && day <= 31 && month >= 1 && month <= 12 &&
-        year >= 2020 && year <= 2099) {
-      return `${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+    if (day >= 1 && day <= 31 && month >= 1 && month <= 12 && year >= 2020 && year <= 2099) {
+      return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
     }
   }
 
-  const dayMatch = clean.match(/(?:ngày|ngay)\s*[-–:]?\s*(\d{1,2})[\/\-\.](\d{1,2})/i);
+  const dayMatch = cleanText.match(/(?:ngày|ngay)\s*[-–:]?\s*(\d{1,2})[\/\-\.](\d{1,2})/i);
   if (dayMatch) {
     const day = parseInt(dayMatch[1], 10);
     const month = parseInt(dayMatch[2], 10);
     if (day >= 1 && day <= 31 && month >= 1 && month <= 12) {
-      const y = new Date().getFullYear();
-      return `${y}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+      return new Date().getFullYear() + '-' + String(month).padStart(2, '0') + '-' + String(day).padStart(2, '0');
     }
   }
 
-  const allMatches = [...clean.matchAll(/(\d{1,2})[\/\-\.](\d{1,2})/g)];
+  const allMatches = [...cleanText.matchAll(/(\d{1,2})[\/\-\.](\d{1,2})/g)];
   for (const m of allMatches) {
     const day = parseInt(m[1], 10);
     const month = parseInt(m[2], 10);
     if (day >= 1 && day <= 31 && month >= 1 && month <= 12) {
-      const y = new Date().getFullYear();
-      return `${y}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+      return new Date().getFullYear() + '-' + String(month).padStart(2, '0') + '-' + String(day).padStart(2, '0');
     }
   }
 
   return getTodayIso();
 }
+// =============================================================
+// OCR ENGINE v1-β — Cache LS · Main · Modals · Copy log · Exports
+// =============================================================
 
-function mapRangeToKey(minStr, maxStr) {
-  const min = parseFloat(minStr);
-  const max = parseFloat(maxStr);
-  if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
+// ==================== LOG STORAGE ====================
+let _lastOcrLog = '';   // fallback khi DOM không có
 
-  const minInt = Math.floor(min);
-
-  if (RANGE_KEY_BY_MIN[minInt] !== undefined) {
-    return RANGE_KEY_BY_MIN[minInt];
-  }
-
-  if (min >= 15) return 'over_15';
-
-  return null;
-}
-
-function parseBlockBased(text) {
-  const weights = {
-    '0_2': 0, '2_4': 0, '4_6': 0, '6_8': 0,
-    '8_10': 0, '10_12': 0, '12_15': 0, 'over_15': 0
-  };
-
-  const lines = text.split('\n');
-  const lineOffsets = [];
-  let offset = 0;
-  lines.forEach(line => {
-    lineOffsets.push({ start: offset, end: offset + line.length });
-    offset += line.length + 1;
-  });
-
-  const rangeRegex = /(\d{1,6}\.\d{3})\s*-\s*(\d{1,6}\.\d{3})/g;
-  const ranges = [];
-  let m;
-  while ((m = rangeRegex.exec(text)) !== null) {
-    const pos = m.index;
-    const lineIdx = lineOffsets.findIndex(o => pos >= o.start && pos < o.end);
-    const key = mapRangeToKey(m[1], m[2]);
-    ranges.push({
-      minStr: m[1],
-      maxStr: m[2],
-      key,
-      pos:    m.index,
-      endPos: m.index + m[0].length,
-      lineIdx
-    });
-  }
-
-  const rangesInOrder = ranges
-    .filter(r => r.key !== null)
-    .map(r => ({ key: r.key, minStr: r.minStr, maxStr: r.maxStr }));
-
-  if (ranges.length === 0) {
-    return { weights, detectedRanges: 0, parseMode: 'block-empty', rangesInOrder: [] };
-  }
-
-  const totalRegex = /Tổng\s*[:\-]?\s*\d{1,6}\s*Đơn\s*hàng/gi;
-  const totalMatches = [...text.matchAll(totalRegex)];
-  const isInsideTotal = (pos) =>
-    totalMatches.some(t => pos >= t.index && pos < t.index + t[0].length);
-
-  const orderRegex = /(\d{1,6})\s*Đơn\s*hàng/i;
-  const LINE_WINDOW = 3;
-
-  const usedMatches = new Set();
-
-  ranges.forEach(r => {
-    if (!r.key) return;
-    if (r.lineIdx === -1) return;
-
-    const searchStart = Math.max(0, r.lineIdx - LINE_WINDOW);
-    const searchEnd   = Math.min(lines.length - 1, r.lineIdx + LINE_WINDOW);
-
-    let best = null, bestDist = Infinity;
-
-    for (let i = searchStart; i <= searchEnd; i++) {
-      const line = lines[i];
-      const lineStart = lineOffsets[i].start;
-
-      const re = new RegExp(orderRegex.source, 'gi');
-      let mm;
-      while ((mm = re.exec(line)) !== null) {
-        const absPos = lineStart + mm.index;
-        if (isInsideTotal(absPos)) continue;
-        if (usedMatches.has(absPos)) continue;
-
-        const val = parseInt(mm[1], 10);
-        if (!Number.isFinite(val) || val < 0) continue;
-
-        const lineDist = Math.abs(i - r.lineIdx);
-        if (lineDist < bestDist) {
-          bestDist = lineDist;
-          best = { value: val, absPos };
-        }
-      }
-    }
-
-    if (best && weights[r.key] === 0) {
-      weights[r.key] = best.value;
-      if (best.absPos != null) usedMatches.add(best.absPos);
-    }
-  });
-
-  // Ordered fallback
-  const allOrderMatches = [];
-  const allRe = /(\d{1,6})\s*Đơn\s*hàng/gi;
-  let am;
-  while ((am = allRe.exec(text)) !== null) {
-    const absPos = am.index;
-    if (isInsideTotal(absPos)) continue;
-    const v = parseInt(am[1], 10);
-    if (!Number.isFinite(v) || v < 0) continue;
-    allOrderMatches.push({ value: v, pos: absPos });
-  }
-
-  const orderedWeights = {
-    '0_2': 0, '2_4': 0, '4_6': 0, '6_8': 0,
-    '8_10': 0, '10_12': 0, '12_15': 0, 'over_15': 0
-  };
-  for (let i = 0; i < ranges.length && i < allOrderMatches.length; i++) {
-    if (ranges[i].key) orderedWeights[ranges[i].key] = allOrderMatches[i].value;
-  }
-
-  const expectedTotal = extractTotal(text);
-  const lineSum = Object.values(weights).reduce((a, b) => a + b, 0);
-  const orderedSum = Object.values(orderedWeights).reduce((a, b) => a + b, 0);
-
-  let finalWeights = weights;
-  let finalMode = 'block-v5-crop';
-
-  if (expectedTotal !== null) {
-    const lineDiff = Math.abs(lineSum - expectedTotal);
-    const orderedDiff = Math.abs(orderedSum - expectedTotal);
-    if (orderedDiff < lineDiff) {
-      finalWeights = orderedWeights;
-      finalMode = 'block-v6-ordered';
-    }
-  }
-
-  return {
-    weights: finalWeights,
-    detectedRanges: ranges.length,
-    parseMode: finalMode,
-    rangesInOrder
-  };
-}
-
-// ==================== VALIDATION ====================
-function validateStructure(weights) {
-  const values = Object.values(weights);
-  const nonZero = values.filter(v => Number(v) > 0).length;
-  const total   = values.reduce((a, b) => a + Number(b), 0);
-
-  const errors = [];
-  if (total === 0) errors.push('Không đọc được đơn nào');
-  if (nonZero > 8) errors.push('Quá nhiều dải có dữ liệu (>8)');
-
-  return { ok: errors.length === 0, errors, warnings: [], nonZero, total };
-}
-
-function validateDistribution(weights) {
-  const w = {
-    '0_2':    Number(weights['0_2'])    || 0,
-    '2_4':    Number(weights['2_4'])    || 0,
-    '4_6':    Number(weights['4_6'])    || 0,
-    '6_8':    Number(weights['6_8'])    || 0,
-    '8_10':   Number(weights['8_10'])   || 0,
-    '10_12':  Number(weights['10_12'])  || 0,
-    '12_15':  Number(weights['12_15'])  || 0,
-    'over_15':Number(weights['over_15'])|| 0
-  };
-  const total = Object.values(w).reduce((s, v) => s + v, 0);
-  if (total < 5) return { ok: true, warnings: [], suspectKeys: [] };
-
-  const warnings = [];
-  const suspects = new Set();
-
-  const maxVal = Math.max(...Object.values(w));
-  const maxKey = Object.keys(w).find(k => w[k] === maxVal);
-  if (maxKey && maxKey !== '0_2' && w['0_2'] > 0 && maxVal > w['0_2'] * 10) {
-    warnings.push(`Dải ${maxKey} cao gấp >10× dải 0-2`);
-    suspects.add(maxKey);
-  }
-
-  if (w['2_4'] > w['0_2'] * 2 && w['0_2'] < 5) {
-    warnings.push('Dải 2-4 cao hơn 0-2 gấp 2 lần — có thể lỗi');
-    suspects.add('2_4');
-  }
-
-  return { ok: warnings.length === 0, warnings, suspectKeys: [...suspects] };
-}
-
-function findExactDuplicate(r) {
-  const type = getTypeFromResult(r);
-  if (!type) return null;
-  const weights = buildWeights(r);
-  return state.appData[type].find(rec =>
-    rec.date === r.parsedDate &&
-    WEIGHT_KEYS.every(k =>
-      (parseInt(rec.weights[k], 10) || 0) === (parseInt(weights[k], 10) || 0)
-    )
-  ) || null;
-}
-
-function findSameDaySameType(r) {
-  const type = getTypeFromResult(r);
-  if (!type) return null;
-  return state.appData[type].find(rec => rec.date === r.parsedDate) || null;
-}
-
-// ==================== SCORING ====================
-function computeScore({
-  expectedTotal,
-  actualTotal,
-  detectedRanges,
-  nonZeroRanges,
-  ocrConfidence,
-  distributionWarnings
-}) {
-  let totalScore;
-  if (expectedTotal === null) {
-    totalScore = 70;
-  } else if (expectedTotal === actualTotal) {
-    totalScore = 100;
-  } else {
-    const diff = Math.abs(expectedTotal - actualTotal);
-    const diffPct = diff / Math.max(expectedTotal, 1);
-    if (diffPct <= 0.02)      totalScore = 90;
-    else if (diffPct <= 0.05) totalScore = 75;
-    else if (diffPct <= 0.10) totalScore = 55;
-    else                      totalScore = 30;
-  }
-
-  let structureScore = 100;
-  if (detectedRanges === 0)        structureScore = 30;
-  else if (detectedRanges > 8)     structureScore = 60;
-  else if (nonZeroRanges === 0)    structureScore = 30;
-
-  const ocrScore = Number.isFinite(ocrConfidence)
-    ? Math.max(0, Math.min(100, ocrConfidence))
-    : 85;
-
-  const distributionScore = distributionWarnings.length === 0
-    ? 100
-    : Math.max(50, 100 - distributionWarnings.length * 15);
-
-  let finalScore =
-    totalScore        * 0.50 +
-    structureScore    * 0.25 +
-    ocrScore          * 0.15 +
-    distributionScore * 0.10;
-
-  const checksumOk = expectedTotal !== null && expectedTotal === actualTotal;
-  if (!checksumOk) {
-    finalScore = Math.min(finalScore, SCORE_MAX_CHECKSUM_FAIL);
-  }
-
-  return {
-    final:        Math.round(finalScore),
-    total:        Math.round(totalScore),
-    structure:    Math.round(structureScore),
-    ocr:          Math.round(ocrScore),
-    distribution: Math.round(distributionScore),
-    checksumOk
-  };
-}
+// ==================== BATCH STATE ====================
+let batchResults = [];
+let pendingAppend = false;
 
 // ==================== HELPERS ====================
 function buildWeights(r) {
   const suffixMap = {
-    '0_2':    'w0_2',
-    '2_4':    'w2_4',
-    '4_6':    'w4_6',
-    '6_8':    'w6_8',
-    '8_10':   'w8_10',
-    '10_12':  'w10_12',
-    '12_15':  'w12_15',
-    'over_15':'wover_15'
+    '0_2':'w0_2','2_4':'w2_4','4_6':'w4_6','6_8':'w6_8',
+    '8_10':'w8_10','10_12':'w10_12','12_15':'w12_15','over_15':'wover_15'
   };
   const w = {};
   WEIGHT_KEYS.forEach(wk => {
@@ -1187,345 +533,84 @@ function buildWeights(r) {
 }
 
 function getTypeFromResult(r) {
-  if (!r.detectedColorType) return null;
-  return r.detectedColorType === 'del'  ? 'delivery'
-       : r.detectedColorType === 'pick' ? 'pickup'
-       : 'return';
+  return r.detectedColorType === 'del' ? 'delivery'
+       : r.detectedColorType === 'pick' ? 'pickup' : 'return';
 }
 
 function getTypeLabel(r) {
-  if (!r.detectedColorType) return 'Không rõ';
-  return r.detectedColorType === 'del'  ? 'Giao'
-       : r.detectedColorType === 'pick' ? 'Lấy'
-       : 'Hoàn';
-}
-// =============================================================
-// OCR ENGINE v3.2 — PART 3/3
-// Pipeline · Crop Refine · Modals · Batch · Exports
-// =============================================================
-
-// ==================== UNDO LOADER ====================
-let _pushUndoFn = null;
-let _pushUndoLoading = null;
-
-async function ensurePushUndo() {
-  if (_pushUndoFn) return _pushUndoFn;
-  if (_pushUndoLoading) return _pushUndoLoading;
-  _pushUndoLoading = (async () => {
-    try {
-      const mod = await import('./undo.js');
-      _pushUndoFn = mod.pushUndo || null;
-      return _pushUndoFn;
-    } catch (e) {
-      console.warn('[OCR] Không load được undo.js:', e);
-      return null;
-    }
-  })();
-  return _pushUndoLoading;
+  return r.detectedColorType === 'del' ? 'Giao'
+       : r.detectedColorType === 'pick' ? 'Lấy' : 'Hoàn';
 }
 
-// ==================== PARSE FROM TEXT ====================
-function parseFromText(rawText) {
-  const normalized = normalizeOcrText(rawText);
-  const expectedTotal = extractTotal(normalized);
-  const parsedDate    = extractDate(normalized);
-  const blockResult   = parseBlockBased(normalized);
-  const weights       = blockResult.weights;
-  const actualTotal   = Object.values(weights).reduce((a, b) => a + b, 0);
+function findExactDuplicate(r) {
+  const type = getTypeFromResult(r);
+  const weights = buildWeights(r);
+  return state.appData[type].find(rec =>
+    rec.date === r.parsedDate &&
+    WEIGHT_KEYS.every(k => (parseInt(rec.weights[k], 10) || 0) === (parseInt(weights[k], 10) || 0))
+  ) || null;
+}
 
-  return {
-    normalized,
-    expectedTotal,
-    parsedDate,
-    weights,
-    actualTotal,
-    detectedRanges: blockResult.detectedRanges,
-    parseMode:      blockResult.parseMode,
-    rangesInOrder:  blockResult.rangesInOrder || []
+// ==================== VALIDATE PHÂN BỐ ====================
+function validateDistribution(weights) {
+  const w = {
+    '0_2':    parseInt(weights['0_2'], 10)   || 0,
+    '2_4':    parseInt(weights['2_4'], 10)   || 0,
+    '4_6':    parseInt(weights['4_6'], 10)   || 0,
+    '6_8':    parseInt(weights['6_8'], 10)   || 0,
+    '8_10':   parseInt(weights['8_10'], 10)  || 0,
+    '10_12':  parseInt(weights['10_12'], 10) || 0,
+    '12_15':  parseInt(weights['12_15'], 10) || 0,
+    'over_15':parseInt(weights['over_15'], 10)|| 0
   };
-}
+  const total = Object.values(w).reduce((s, v) => s + v, 0);
+  if (total < 5) return { ok: true, warnings: [], suspectKeys: [] };
 
-// ==================== SCORE RESULT ====================
-function scoreResult(parsed) {
-  const structure = validateStructure(parsed.weights);
-  const dist      = validateDistribution(parsed.weights);
-  const nonZero   = Object.values(parsed.weights).filter(v => v > 0).length;
+  const warnings = [];
+  const suspects = new Set();
 
-  const score = computeScore({
-    expectedTotal: parsed.expectedTotal,
-    actualTotal:   parsed.actualTotal,
-    detectedRanges: parsed.detectedRanges,
-    nonZeroRanges:  nonZero,
-    ocrConfidence: 85,
-    distributionWarnings: dist.warnings
-  });
-
-  return {
-    score,
-    structure,
-    dist,
-    nonZero,
-    suspectKeys: dist.suspectKeys || []
-  };
-}
-
-// ==================== v3.0: CROP REFINE ====================
-async function refineWithCrop(imageSource, parsed, signal) {
-  _lastCropLog = [];
-
-  const rangesInOrder = parsed.rangesInOrder || [];
-  _lastCropLog.push(`[v3] rangesInOrder: ${rangesInOrder.map(r => r.key).join(', ') || 'EMPTY'}`);
-
-  if (rangesInOrder.length === 0 || rangesInOrder.length > 8) {
-    _lastCropLog.push(`[v3] SKIP — count = ${rangesInOrder.length}`);
-    return null;
+  if (w['0_2'] / total < 0.5) {
+    warnings.push(`Dải 0-2 chỉ ${Math.round(w['0_2']/total*100)}% (thường ≥50%)`);
+    suspects.add('0_2');
+  }
+  if (w['2_4'] >= 10 && w['0_2'] < w['2_4'] * 0.33) {
+    warnings.push('Dải 2-4 nhiều bất thường so với dải 0-2');
+    suspects.add('0_2'); suspects.add('2_4');
+  }
+  if (w['4_6'] >= 5 && w['2_4'] < w['4_6'] * 0.33) {
+    warnings.push('Dải 4-6 nhiều bất thường so với dải 2-4');
+    suspects.add('2_4'); suspects.add('4_6');
+  }
+  const maxKey = Object.keys(w).reduce((a, b) => w[a] > w[b] ? a : b);
+  if (w['0_2'] > 0 && w[maxKey] > w['0_2'] * 5) {
+    warnings.push('Có dải cao bất thường');
+    suspects.add(maxKey);
+  }
+  const small = w['0_2'] + w['2_4'] + w['4_6'];
+  if (small / total < 0.7) {
+    warnings.push(`Dải nhỏ chỉ ${Math.round(small/total*100)}% (thường ≥70%)`);
+    suspects.add('0_2'); suspects.add('2_4'); suspects.add('4_6');
   }
 
-  let img;
-  try {
-    img = await loadImage(imageSource);
-  } catch (e) {
-    _lastCropLog.push(`[v3] loadImage FAIL: ${e.message}`);
-    return null;
-  }
-
-  _lastCropLog.push(`[v3] img: ${img.width}x${img.height}`);
-
-  const cards = computeCardRegions(img.height, rangesInOrder.length);
-  if (cards.length === 0) {
-    _lastCropLog.push(`[v3] computeCardRegions EMPTY`);
-    return null;
-  }
-
-  _lastCropLog.push(`[v3] cards: ${cards.length} (top=${cards[0].top} bottom=${cards[cards.length-1].bottom})`);
-
-  const refinedWeights = {
-    '0_2':0, '2_4':0, '4_6':0, '6_8':0,
-    '8_10':0, '10_12':0, '12_15':0, 'over_15':0
-  };
-
-  for (let i = 0; i < cards.length; i++) {
-    _checkAborted(signal);
-    try {
-      const num = await ocrCardNumber(imageSource, cards[i], signal);
-      _lastCropLog.push(`[v3] card ${i} (${rangesInOrder[i].key}): ${num === null ? 'NULL' : num}`);
-      if (num === null) {
-        _lastCropLog.push(`[v3] ABORT — card ${i} NULL`);
-        return null;
-      }
-      refinedWeights[rangesInOrder[i].key] = num;
-    } catch (e) {
-      if (e.message === 'OCR_CANCELLED') throw e;
-      _lastCropLog.push(`[v3] card ${i} ERROR: ${e.message}`);
-      return null;
-    }
-  }
-
-  const sum = Object.values(refinedWeights).reduce((a, b) => a + b, 0);
-  const expected = parsed.expectedTotal;
-
-  _lastCropLog.push(`[v3] sum=${sum} expected=${expected}`);
-
-  if (expected !== null && sum !== expected) {
-    _lastCropLog.push(`[v3] FAIL — sum != expected`);
-    return null;
-  }
-
-  _lastCropLog.push(`[v3] ✅ OK`);
-  return refinedWeights;
-}
-// ==================== /CROP REFINE ====================
-
-
-// ==================== BUILD FINAL RESULT ====================
-function buildFinalResult({
-  parsed, rawText, detectedColorType, tabConfidence, tabMethod,
-  scoreBundle, attempts, blobUrl
-}) {
-  const confidences = {};
-  Object.keys(parsed.weights).forEach(k => {
-    confidences[k] = scoreBundle.score.final;
-  });
-
-  return {
-    detectedColorType,
-    tabConfidence: tabConfidence || 0,
-    tabMethod: tabMethod || '',
-    parsedDate:    parsed.parsedDate,
-    weights:       parsed.weights,
-    confidences,
-
-    expectedTotal: parsed.expectedTotal,
-    actualTotal:   parsed.actualTotal,
-    totalFound:    parsed.actualTotal,
-
-    score: scoreBundle.score,
-
-    distWarnings: scoreBundle.dist.warnings,
-    suspectKeys:  scoreBundle.suspectKeys,
-
-    attempts,
-    parseMode: parsed.parseMode,
-    detectedRanges: parsed.detectedRanges,
-
-    rawText,
-    imageBlobUrl: blobUrl || '',
-    fullDataUrl:  blobUrl || ''
-  };
-}
-
-// ==================== PROCESS ONE FILE (v3.2) ====================
-async function processOneFile(file, signal) {
-  _checkAborted(signal);
-
-  const hash = await hashBlob(file);
-  const cached = cacheGet(hash);
-
-  const blobUrl = URL.createObjectURL(file);
-
-  if (cached) {
-    return {
-      file: file.name,
-      thumbnail: cached.thumbnail,
-      result: { ...cached.result, imageBlobUrl: blobUrl, fullDataUrl: blobUrl },
-      error: null,
-      fromCache: true
-    };
-  }
-
-  _checkAborted(signal);
-  const dataUrl = await readFileAsDataURL(file);
-  const thumbnail = await makeThumbnail(dataUrl, 96);
-
-  _checkAborted(signal);
-  const tabInfo = await detectActiveTab(dataUrl);
-  const detectedColorType = tabInfo ? tabInfo.type : null;
-  const tabConfidence = tabInfo ? tabInfo.confidence : 0;
-  const tabMethod = tabInfo ? (tabInfo.method || '') : '';
-
-  let bestBundle = null;
-  let bestScore  = -1;
-  let attempts   = 0;
-
-  // Pass 1 = Otsu thuần (không contrast), giống v1
-  const passes = [
-    { name: 'P0-otsu',       run: () => preprocessPass2(dataUrl, signal) },
-    { name: 'P1-raw',        run: () => Promise.resolve(dataUrl) },
-    { name: 'P3-threshold',  run: () => preprocessPass3(dataUrl, 130, signal) }
-  ];
-
-  for (const pass of passes) {
-    _checkAborted(signal);
-    attempts++;
-
-    try {
-      const statusDesc = document.getElementById('ocrStatusDesc');
-      if (statusDesc) statusDesc.innerText = `Đang nhận diện (${pass.name})...`;
-
-      const preprocessed = await pass.run();
-      _checkAborted(signal);
-
-      const text = await ocrRecognize(preprocessed, signal);
-      _checkAborted(signal);
-
-      const parsed = parseFromText(text);
-      const scoreBundle = scoreResult(parsed);
-
-      const bundle = { parsed, rawText: text, scoreBundle, passName: pass.name };
-
-      if (scoreBundle.score.final >= SCORE_AUTO_SAVE) {
-        bestBundle = bundle;
-        bestScore  = scoreBundle.score.final;
-        break;
-      }
-
-      if (scoreBundle.score.final > bestScore) {
-        bestScore  = scoreBundle.score.final;
-        bestBundle = bundle;
-      }
-    } catch (err) {
-      if (err.message === 'OCR_CANCELLED') throw err;
-      console.warn(`[OCR] Pass ${pass.name} lỗi:`, err.message);
-    }
-  }
-
-  if (!bestBundle) {
-    return {
-      file: file.name,
-      thumbnail,
-      result: null,
-      error: 'Không đọc được ảnh (3 pass đều lỗi)'
-    };
-  }
-
-  // Crop refine nếu checksum fail
-  let finalParsed = bestBundle.parsed;
-  let finalScoreBundle = bestBundle.scoreBundle;
-
-  if (!finalScoreBundle.score.checksumOk) {
-    console.log('[OCR v3] Checksum fail → thử crop refine...');
-    try {
-      const statusDesc = document.getElementById('ocrStatusDesc');
-      if (statusDesc) statusDesc.innerText = 'Đang refine từng card...';
-
-      const refined = await refineWithCrop(dataUrl, finalParsed, signal);
-
-      if (refined) {
-        const newTotal = Object.values(refined).reduce((a, b) => a + b, 0);
-        const newScore = computeScore({
-          expectedTotal: finalParsed.expectedTotal,
-          actualTotal: newTotal,
-          detectedRanges: finalParsed.detectedRanges,
-          nonZeroRanges: Object.values(refined).filter(v => v > 0).length,
-          ocrConfidence: 92,
-          distributionWarnings: []
-        });
-
-        finalParsed = { ...finalParsed, weights: refined, actualTotal: newTotal };
-        finalScoreBundle = {
-          score: newScore,
-          structure: finalScoreBundle.structure,
-          dist: { warnings: [], suspectKeys: [] },
-          nonZero: Object.values(refined).filter(v => v > 0).length,
-          suspectKeys: []
-        };
-
-        console.log(`[OCR v3] ✅ Refined score: ${newScore.final}`);
-      }
-    } catch (e) {
-      if (e.message === 'OCR_CANCELLED') throw e;
-      console.warn('[OCR v3] Crop refine error:', e);
-    }
-  }
-
-  const result = buildFinalResult({
-    parsed:          finalParsed,
-    rawText:         bestBundle.rawText,
-    detectedColorType,
-    tabConfidence,
-    tabMethod,
-    scoreBundle:     finalScoreBundle,
-    attempts,
-    blobUrl
-  });
-
-  cacheSet(hash, {
-    thumbnail,
-    result: { ...result, imageBlobUrl: '', fullDataUrl: '' }
-  });
-
-  return { file: file.name, thumbnail, result, error: null };
+  return { ok: warnings.length === 0, warnings, suspectKeys: [...suspects] };
 }
 
 // ==================== AUTO-SAVE ====================
 async function tryAutoSave(r) {
-  if (!r.detectedColorType) return false;
-  if (r.score.final < SCORE_AUTO_SAVE) return false;
-  if (r.actualTotal <= 0) return false;
+  if (DISABLE_AUTO_SAVE) return false;
+
+  const confs = Object.values(r.confidences).filter(c => c != null);
+  if (confs.length === 0) return false;
+  const allHigh = confs.every(c => c >= 85);
+  if (!allHigh) return false;
+
+  if (r.expectedTotal !== null && r.expectedTotal !== r.totalFound) return false;
+  if (r.totalFound <= 0) return false;
+
+  const dist = validateDistribution(r.weights);
+  if (!dist.ok) return false;
 
   const type = getTypeFromResult(r);
-  if (!type) return false;
-
   const weights = buildWeights(r);
   const newId = generateId();
 
@@ -1545,10 +630,7 @@ async function tryAutoSave(r) {
 }
 
 async function tryAutoSaveForce(r) {
-  if (!r.detectedColorType) return false;
   const type = getTypeFromResult(r);
-  if (!type) return false;
-
   const weights = buildWeights(r);
   const newId = generateId();
 
@@ -1567,16 +649,171 @@ async function tryAutoSaveForce(r) {
   return true;
 }
 
-// ==================== COPY OCR LOG ====================
+// ==================== CACHE 2 TẦNG (RAM + localStorage) ====================
+const ocrCache = new Map();
+
+function _cacheKey(hash) {
+  return `${OCR_CACHE_VERSION}_${hash}`;
+}
+
+function readCacheIndex() {
+  try {
+    const raw = localStorage.getItem(LS_CACHE_INDEX);
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr : [];
+  } catch { return []; }
+}
+
+function writeCacheIndex(index) {
+  try { localStorage.setItem(LS_CACHE_INDEX, JSON.stringify(index)); } catch {}
+}
+
+function estimateLocalStorageBytes() {
+  try {
+    let total = 0;
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key || !key.startsWith(LS_CACHE_PREFIX)) continue;
+      const val = localStorage.getItem(key);
+      if (val) total += key.length + val.length;
+    }
+    return total * 2;
+  } catch { return 0; }
+}
+
+function evictOldestCache() {
+  const index = readCacheIndex();
+  if (index.length === 0) return false;
+  const oldest = index.shift();
+  try { localStorage.removeItem(LS_CACHE_PREFIX + oldest); } catch {}
+  writeCacheIndex(index);
+  ocrCache.delete(oldest);
+  return true;
+}
+
+function pruneCacheIfNeeded() {
+  const index = readCacheIndex();
+  const targetCount = Math.floor(OCR_CACHE_MAX * 0.8);
+  let removedCount = 0;
+  while (index.length > targetCount) {
+    const oldest = index.shift();
+    try { localStorage.removeItem(LS_CACHE_PREFIX + oldest); } catch {}
+    ocrCache.delete(oldest);
+    removedCount++;
+  }
+  if (removedCount > 0) writeCacheIndex(index);
+
+  let bytes = estimateLocalStorageBytes();
+  const targetBytes = LS_CACHE_MAX_BYTES * 0.5;
+  let safety = 100;
+  while (bytes > targetBytes && safety-- > 0) {
+    if (!evictOldestCache()) break;
+    bytes = estimateLocalStorageBytes();
+  }
+}
+
+function cacheGet(hash) {
+  const key = _cacheKey(hash);
+  if (ocrCache.has(key)) {
+    const v = ocrCache.get(key);
+    const index = readCacheIndex();
+    const idx = index.indexOf(key);
+    if (idx !== -1) { index.splice(idx, 1); index.push(key); writeCacheIndex(index); }
+    return v;
+  }
+  try {
+    const raw = localStorage.getItem(LS_CACHE_PREFIX + key);
+    if (raw) {
+      const value = JSON.parse(raw);
+      ocrCache.set(key, value);
+      const index = readCacheIndex();
+      const idx = index.indexOf(key);
+      if (idx !== -1) { index.splice(idx, 1); index.push(key); writeCacheIndex(index); }
+      return value;
+    }
+  } catch {}
+  return null;
+}
+
+function cacheSet(hash, value) {
+  const key = _cacheKey(hash);
+  ocrCache.set(key, value);
+  try {
+    localStorage.setItem(LS_CACHE_PREFIX + key, JSON.stringify(value));
+    const index = readCacheIndex();
+    if (!index.includes(key)) { index.push(key); writeCacheIndex(index); }
+    pruneCacheIfNeeded();
+  } catch (e) {
+    try {
+      pruneCacheIfNeeded();
+      localStorage.setItem(LS_CACHE_PREFIX + key, JSON.stringify(value));
+    } catch {}
+  }
+}
+
+// ==================== XÓA CACHE OCR ====================
+export async function clearOcrCache() {
+  const ok = await showConfirm(
+    'Xóa toàn bộ cache OCR?\n\nLần sau quét lại ảnh cũ sẽ phải OCR từ đầu.',
+    { title: '🗑️ Xóa cache OCR', okText: 'Xóa', cancelText: 'Hủy', danger: true }
+  );
+  if (!ok) return 0;
+
+  let count = 0;
+  ocrCache.clear();
+  try {
+    const index = readCacheIndex();
+    count = index.length;
+    index.forEach(key => { try { localStorage.removeItem(LS_CACHE_PREFIX + key); } catch {} });
+    localStorage.removeItem(LS_CACHE_INDEX);
+  } catch {}
+  try {
+    const toRemove = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith(LS_CACHE_PREFIX)) toRemove.push(key);
+    }
+    toRemove.forEach(k => { try { localStorage.removeItem(k); } catch {} });
+    count = Math.max(count, toRemove.length);
+  } catch {}
+  showToast(`Đã xóa ${count} cache OCR`, 'success', 2500);
+  return count;
+}
+
+export function getOcrCacheStats() {
+  const index = readCacheIndex();
+  return {
+    ramEntries: ocrCache.size,
+    lsEntries: index.length,
+    sizeKB: Math.round(estimateLocalStorageBytes() / 1024),
+    maxEntries: OCR_CACHE_MAX,
+    maxSizeKB: Math.round(LS_CACHE_MAX_BYTES / 1024)
+  };
+}
+
+// ==================== HASH BLOB ====================
+async function hashBlob(file) {
+  try {
+    const buf = await file.arrayBuffer();
+    const hashBuf = await crypto.subtle.digest('SHA-256', buf);
+    return Array.from(new Uint8Array(hashBuf))
+      .map(b => b.toString(16).padStart(2, '0')).join('');
+  } catch {
+    return 'fb_' + Date.now().toString(16) + '_' + file.size + '_' + (file.name || '').length;
+  }
+}
+
+// ==================== COPY LOG ====================
 export async function copyOcrLog() {
   const debugEl = document.getElementById('ocrDebugText');
-  if (!debugEl) {
+
+  // Ưu tiên: DOM → fallback biến module
+  let text = (debugEl && debugEl.innerText) ? debugEl.innerText.trim() : '';
+  if (!text) text = (_lastOcrLog || '').trim();
+
+  if (!text) {
     showToast('Không có log để copy', 'warning', 1500);
-    return;
-  }
-  const text = debugEl.innerText;
-  if (!text || text.trim() === '') {
-    showToast('Log trống', 'warning', 1500);
     return;
   }
 
@@ -1611,157 +848,42 @@ export async function copyOcrLog() {
   }
 }
 
-// ==================== TAB PICKER MODAL ====================
-function showTabPickerModal() {
-  return new Promise(resolve => {
-    const style = document.createElement('style');
-    style.textContent = `
-      .tab-picker-btn {
-        padding: 14px 16px;
-        border-radius: 12px;
-        border: 1px solid var(--border);
-        background: var(--surface);
-        color: var(--text-1);
-        font-size: 13.5px;
-        font-weight: 600;
-        font-family: inherit;
-        text-align: left;
-        cursor: pointer;
-        transition: all 0.15s;
-      }
-      .tab-picker-btn:hover { border-color: var(--accent); background: var(--accent-soft); }
-      .tab-picker-btn:active { transform: scale(0.98); }
-      .tab-picker-btn.skip { color: var(--danger); }
-      .tab-picker-btn.skip:hover { background: var(--danger-bg); border-color: var(--danger-bd); }
-    `;
-    document.head.appendChild(style);
+/**
+ * Inject nút "📋 Copy log" vào .ocr-preview-label (cạnh nút Ẩn)
+ * Gọi mỗi lần mở modal — chỉ inject 1 lần
+ */
+function injectCopyLogButton() {
+  const label = document.querySelector('#ocrPreviewBox .ocr-preview-label');
+  if (!label) return;
 
-    const shade = document.createElement('div');
-    shade.className = 'modal-shade active';
-    shade.style.zIndex = '500';
-    shade.innerHTML = `
-      <div class="modal-box" style="max-width:380px;border-radius:20px;margin:auto 16px;">
-        <div class="modal-box-head">
-          <h3>Chọn loại đơn</h3>
-        </div>
-        <div class="modal-body" style="padding:20px">
-          <p style="font-size:13px;color:var(--text-2);margin-bottom:16px;text-align:center;line-height:1.5">
-            Không nhận diện được tab từ ảnh này.<br>
-            Ảnh này là đơn gì?
-          </p>
-          <div style="display:flex;flex-direction:column;gap:10px">
-            <button class="tab-picker-btn" data-type="del">🚚 Giao — Đơn giao hàng</button>
-            <button class="tab-picker-btn" data-type="pick">📦 Lấy — Đơn lấy hàng</button>
-            <button class="tab-picker-btn" data-type="ret">↩️ Hoàn — Đơn hoàn</button>
-            <button class="tab-picker-btn skip" data-type="skip">🗑️ Bỏ ảnh này</button>
-          </div>
-        </div>
-      </div>
-    `;
+  if (document.getElementById('ocrCopyLogBtn')) return;
 
-    shade.querySelectorAll('.tab-picker-btn').forEach(btn => {
-      btn.onclick = () => {
-        const type = btn.dataset.type;
-        document.body.removeChild(shade);
-        resolve(type === 'skip' ? null : type);
-      };
-    });
+  const btn = document.createElement('button');
+  btn.id = 'ocrCopyLogBtn';
+  btn.type = 'button';
+  btn.innerText = '📋 Copy log';
+  btn.style.cssText = `
+    cursor: pointer;
+    padding: 3px 9px;
+    border-radius: 6px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text-2);
+    font-size: 10px;
+    font-weight: 700;
+    font-family: inherit;
+    margin-right: 6px;
+    transition: all 0.15s;
+  `;
+  btn.onclick = () => copyOcrLog();
 
-    document.body.appendChild(shade);
-  });
-}
-
-// ==================== REVIEW MODAL ====================
-function showReviewModal(item) {
-  return new Promise(resolve => {
-    const r = item.result;
-
-    const style = document.createElement('style');
-    style.textContent = `
-      .review-btn {
-        flex: 1;
-        padding: 12px;
-        border-radius: 10px;
-        font-size: 13px;
-        font-weight: 700;
-        font-family: inherit;
-        cursor: pointer;
-        border: 1px solid;
-        transition: all 0.15s;
-      }
-      .review-btn-edit { background: var(--surface); border-color: var(--border); color: var(--text-1); }
-      .review-btn-edit:hover { border-color: var(--accent); color: var(--accent); }
-      .review-btn-save { background: var(--accent); border-color: var(--accent); color: #fff; }
-      .review-btn-save:hover { filter: brightness(0.95); }
-      .review-btn:active { transform: scale(0.97); }
-    `;
-    document.head.appendChild(style);
-
-    let warningsHtml = '';
-    if (r.distWarnings && r.distWarnings.length > 0) {
-      warningsHtml = `<div style="background:var(--warning-bg);border:1px solid var(--warning-bd);border-radius:10px;padding:10px 12px;margin-bottom:14px;font-size:11.5px;color:var(--warning);line-height:1.6">
-        ${r.distWarnings.map(w => '⚠️ ' + w).join('<br>')}
-      </div>`;
-    }
-
-    const scoreColor = r.score.final >= 90 ? 'var(--success)' : 'var(--warning)';
-
-    const shade = document.createElement('div');
-    shade.className = 'modal-shade active';
-    shade.style.zIndex = '500';
-    shade.innerHTML = `
-      <div class="modal-box" style="max-width:400px;border-radius:20px;margin:auto 16px;">
-        <div class="modal-box-head">
-          <h3>⚠️ Cần kiểm tra</h3>
-        </div>
-        <div class="modal-body" style="padding:20px">
-          <div style="text-align:center;margin-bottom:16px">
-            <div style="font-size:34px;font-weight:800;font-family:'JetBrains Mono',monospace;color:${scoreColor};line-height:1">
-              ${r.score.final}<span style="font-size:16px;color:var(--text-3)">/100</span>
-            </div>
-            <div style="font-size:11px;color:var(--text-3);margin-top:4px;letter-spacing:0.5px;text-transform:uppercase">Điểm tin cậy</div>
-          </div>
-
-          <div style="background:var(--surface-2);border-radius:10px;padding:12px 14px;margin-bottom:14px;font-size:12.5px;line-height:1.8">
-            <div><b>Loại:</b> ${getTypeLabel(r)}</div>
-            <div><b>Ngày:</b> ${formatDateDisplay(r.parsedDate)}</div>
-            <div><b>Tổng OCR:</b> ${r.actualTotal} đơn</div>
-            <div><b>Tổng ảnh:</b> ${r.expectedTotal !== null ? r.expectedTotal + ' đơn' : '—'}</div>
-            <div><b>Checksum:</b> ${r.score.checksumOk ? '✅ Khớp' : '❌ Không khớp'}</div>
-          </div>
-
-          ${warningsHtml}
-
-          <div style="font-size:11px;color:var(--text-3);margin-bottom:14px;font-family:'JetBrains Mono',monospace">
-            Total ${r.score.total} · Structure ${r.score.structure} · OCR ${r.score.ocr} · Dist ${r.score.distribution}
-          </div>
-
-          <div style="display:flex;gap:8px">
-            <button class="review-btn review-btn-edit">✏️ Sửa</button>
-            <button class="review-btn review-btn-save">✅ Lưu luôn</button>
-          </div>
-        </div>
-      </div>
-    `;
-
-    shade.querySelector('.review-btn-edit').onclick = () => {
-      document.body.removeChild(shade);
-      fillModalFromResult(item);
-      resolve('edit');
-    };
-
-    shade.querySelector('.review-btn-save').onclick = async () => {
-      document.body.removeChild(shade);
-      if (await tryAutoSaveForce(r)) {
-        showToast(`Đã lưu ${getTypeLabel(r)} ${formatDateDisplay(r.parsedDate)}`, 'success', 2500);
-      } else {
-        showToast('Không lưu được — thiếu loại đơn', 'error', 2500);
-      }
-      resolve('saved');
-    };
-
-    document.body.appendChild(shade);
-  });
+  // Chèn TRƯỚC nút Ẩn
+  const hideBtn = label.querySelector('.ocr-hide-btn');
+  if (hideBtn) {
+    label.insertBefore(btn, hideBtn);
+  } else {
+    label.appendChild(btn);
+  }
 }
 
 // ==================== CANCEL BUTTON ====================
@@ -1769,10 +891,9 @@ function ensureCancelButton() {
   const overlay = document.getElementById('ocrLoadingOverlay');
   if (!overlay) return;
 
-  let btn = overlay.querySelector('.ocr-cancel-btn');
-  if (btn) return;
+  if (overlay.querySelector('.ocr-cancel-btn')) return;
 
-  btn = document.createElement('button');
+  const btn = document.createElement('button');
   btn.className = 'ocr-cancel-btn';
   btn.innerText = '✕ Hủy';
   btn.style.cssText = `
@@ -1787,13 +908,110 @@ function ensureCancelButton() {
     font-family: inherit;
     cursor: pointer;
     backdrop-filter: blur(4px);
-    transition: all 0.15s;
   `;
   btn.onclick = () => cancelOcr();
   overlay.appendChild(btn);
 }
 
-// ==================== SUMMARY TOAST ====================
+// ==================== MAIN: HANDLE OCR IMAGE ====================
+export async function handleOcrImage(event) {
+  const files = Array.from(event.target.files || []);
+  event.target.value = '';
+  if (files.length === 0) { pendingAppend = false; return; }
+
+  const wasAppend = pendingAppend;
+  pendingAppend = false;
+
+  const ctrl = _newAbortController();
+  const signal = ctrl.signal;
+
+  const overlay = document.getElementById('ocrLoadingOverlay');
+  overlay.style.display = 'flex';
+  ensureCancelButton();
+
+  try {
+    const newResults = await processFiles(files, signal);
+    overlay.style.display = 'none';
+
+    const autoSaved = [];
+    const duplicates = [];
+    const needAttention = [];
+
+    for (const item of newResults) {
+      if (item.error) { needAttention.push(item); continue; }
+      const r = item.result;
+
+      if (findExactDuplicate(r)) { duplicates.push(item); continue; }
+
+      if (await tryAutoSave(r)) {
+        autoSaved.push(item);
+      } else {
+        needAttention.push(item);
+      }
+    }
+
+    if (needAttention.length > 0) {
+      if (wasAppend) {
+        batchResults.push(...needAttention);
+        renderBatchList();
+        document.getElementById('batchOcrModal').classList.add('active');
+        showSummaryToast(autoSaved.length, duplicates.length, needAttention.length);
+        return;
+      }
+
+      if (files.length === 1) {
+        const item = newResults[0];
+        if (item.error) {
+          showToast('Không đọc được ảnh: ' + item.error, 'error', 3000);
+          return;
+        }
+        fillModalFromResult(item);
+        return;
+      }
+
+      batchResults = needAttention;
+      openBatchOcrModal();
+      showSummaryToast(autoSaved.length, duplicates.length, needAttention.length, 400);
+      return;
+    }
+
+    if (files.length === 1) {
+      const item = newResults[0];
+      const r = item.result;
+      if (duplicates.length === 1) {
+        showToast(
+          `Ảnh đã tồn tại — ${getTypeLabel(r)} ${formatDateDisplay(r.parsedDate)}: ${r.totalFound} đơn`,
+          'warning', 2500
+        );
+        return;
+      }
+      if (autoSaved.length === 1) {
+        showToast(
+          `Đã tự động lưu ${getTypeLabel(r)} ${formatDateDisplay(r.parsedDate)}: ${r.totalFound} đơn`,
+          'success', 2500
+        );
+      }
+      return;
+    }
+
+    if (autoSaved.length > 0 || duplicates.length > 0) {
+      showSummaryToast(autoSaved.length, duplicates.length, 0);
+    }
+  } catch (err) {
+    overlay.style.display = 'none';
+
+    if (err.message === 'OCR_CANCELLED') {
+      showToast('Đã hủy OCR', 'warning', 2000);
+      return;
+    }
+
+    console.error(err);
+    showToast('Lỗi khi quét ảnh: ' + err.message, 'error', 3000);
+  } finally {
+    _clearAbortController(ctrl);
+  }
+}
+
 function showSummaryToast(saved, dup, need, delayMs = 0) {
   const parts = [];
   if (saved > 0) parts.push(`Đã lưu ${saved}`);
@@ -1812,245 +1030,122 @@ function showSummaryToast(saved, dup, need, delayMs = 0) {
   else fire();
 }
 
-// ==================== PIPELINE CHUNG ====================
-async function _runOcrFromFiles(files, wasAppend = false) {
-  if (!files || files.length === 0) return;
-
-  const ctrl = _newAbortController();
-  const signal = ctrl.signal;
-
-  const overlay = document.getElementById('ocrLoadingOverlay');
+// ==================== PROCESS FILES (v1 pipeline + abort) ====================
+async function processFiles(files, signal) {
+  const out = [];
   const statusTitle = document.getElementById('ocrStatusTitle');
   const statusDesc  = document.getElementById('ocrStatusDesc');
+  statusTitle.innerText = 'Đang khởi tạo...';
+  statusDesc.innerText  = cachedTesseractWorker ? 'Worker sẵn sàng' : 'Lần đầu tải ~15MB...';
 
-  if (overlay) overlay.style.display = 'flex';
-  ensureCancelButton();
+  await getTesseractWorker();
 
-  try {
-    const results = [];
+  for (let i = 0; i < files.length; i++) {
+    _checkAborted(signal);
+    const file = files[i];
+    statusTitle.innerText = `Ảnh ${i + 1}/${files.length}`;
+    statusDesc.innerText  = 'Đang đọc file...';
 
-    for (let i = 0; i < files.length; i++) {
+    try {
+      const hash = await hashBlob(file);
+      const cached = cacheGet(hash);
+
+      if (cached) {
+        statusDesc.innerText = '⚡ Dùng cache...';
+        const rawDataUrl = await readFileAsDataURL(file);
+        const cachedResult = { ...cached.result, fullDataUrl: rawDataUrl };
+        out.push({ file: file.name, thumbnail: cached.thumbnail, result: cachedResult, error: null, fromCache: true });
+        continue;
+      }
+
+      statusDesc.innerText = 'Đang đọc file...';
+      const rawDataUrl = await readFileAsDataURL(file);
+
+      statusDesc.innerText = 'Xử lý ảnh...';
+      const thumbnail = await makeThumbnail(rawDataUrl, 96);
+
+      statusDesc.innerText = 'Xác định tab...';
+      const detectedType = await detectActiveTabByOrangeLine(rawDataUrl);
+
+      statusDesc.innerText = 'Quét lần 1...';
+      const pre1 = await preprocessImage(rawDataUrl, { upscale: 2.0, useOtsu: true });
       _checkAborted(signal);
-      if (statusTitle) statusTitle.innerText = `Ảnh ${i + 1}/${files.length}`;
-      if (statusDesc)  statusDesc.innerText  = 'Đang xử lý...';
+      const text1 = await ocrRecognize(pre1.dataUrl, signal);
+      const parsed1 = parseOcrText(text1);
 
-      const item = await processOneFile(files[i], signal);
-      results.push(item);
+      let bestResult = parsed1;
+      let bestText = text1;
+      let bestDiff = parsed1.expectedTotal !== null ? Math.abs(parsed1.totalFound - parsed1.expectedTotal) : 9999;
+
+      if (bestDiff > 0) {
+        _checkAborted(signal);
+        statusDesc.innerText = 'Quét lần 2...';
+        const pre2 = await preprocessImage(rawDataUrl, { upscale: 2.0, useOtsu: false, threshold: 130 });
+        const text2 = await ocrRecognize(pre2.dataUrl, signal);
+        const parsed2 = parseOcrText(text2);
+        const diff2 = parsed2.expectedTotal !== null ? Math.abs(parsed2.totalFound - parsed2.expectedTotal) : 9999;
+        if (diff2 < bestDiff) { bestResult = parsed2; bestText = text2; bestDiff = diff2; }
+      }
+
+      if (bestDiff > 0) {
+        _checkAborted(signal);
+        statusDesc.innerText = 'Quét lần 3...';
+        const pre3 = await preprocessImage(rawDataUrl, { upscale: 2.5, useOtsu: false, threshold: 160 });
+        const text3 = await ocrRecognize(pre3.dataUrl, signal);
+        const parsed3 = parseOcrText(text3);
+        const diff3 = parsed3.expectedTotal !== null ? Math.abs(parsed3.totalFound - parsed3.expectedTotal) : 9999;
+        if (diff3 < bestDiff) { bestResult = parsed3; bestText = text3; bestDiff = diff3; }
+      }
+
+      const result = {
+        detectedColorType: detectedType || 'del',
+        parsedDate: extractDate(bestText),
+        weights: bestResult.weights,
+        confidences: bestResult.confidences,
+        expectedTotal: bestResult.expectedTotal,
+        totalFound: bestResult.totalFound,
+        mode: bestResult.mode,
+        rawText: bestText,
+        fullDataUrl: rawDataUrl
+      };
+
+      out.push({ file: file.name, thumbnail, result, error: null });
+      cacheSet(hash, { thumbnail, result: { ...result, fullDataUrl: '' } });
+    } catch (err) {
+      if (err.message === 'OCR_CANCELLED') throw err;
+      console.error('[OCR]', file.name, err);
+      out.push({ file: file.name, thumbnail: '', result: null, error: err.message });
     }
-
-    if (overlay) overlay.style.display = 'none';
-
-    const autoSaved     = [];
-    const duplicates    = [];
-    const needAttention = [];
-    const needTab       = [];
-
-    for (const item of results) {
-      if (item.error) { needAttention.push(item); continue; }
-      const r = item.result;
-
-      if (!r.detectedColorType) { needTab.push(item); continue; }
-
-      if (findExactDuplicate(r)) {
-        duplicates.push({ item, kind: 'exact' });
-        continue;
-      }
-
-      const sameDay = findSameDaySameType(r);
-      if (sameDay) {
-        duplicates.push({ item, kind: 'same_day', existing: sameDay });
-        continue;
-      }
-
-      if (r.score.final >= SCORE_AUTO_SAVE) {
-        if (await tryAutoSave(r)) autoSaved.push(item);
-        else needAttention.push(item);
-      } else {
-        needAttention.push(item);
-      }
-    }
-
-    for (const item of needTab) {
-      _checkAborted(signal);
-      const type = await showTabPickerModal();
-      if (type === null) continue;
-
-      item.result.detectedColorType = type;
-      item.result.tabConfidence = 100;
-      item.result.tabMethod = 'user-picker';
-
-      if (findExactDuplicate(item.result)) {
-        duplicates.push({ item, kind: 'exact' });
-        continue;
-      }
-      const sameDay = findSameDaySameType(item.result);
-      if (sameDay) {
-        duplicates.push({ item, kind: 'same_day', existing: sameDay });
-        continue;
-      }
-
-      if (item.result.score.final >= SCORE_AUTO_SAVE) {
-        if (await tryAutoSave(item.result)) autoSaved.push(item);
-        else needAttention.push(item);
-      } else {
-        needAttention.push(item);
-      }
-    }
-
-    if (needAttention.length > 0) {
-      if (wasAppend) {
-        batchResults.push(...needAttention);
-        renderBatchList();
-        document.getElementById('batchOcrModal').classList.add('active');
-        showSummaryToast(autoSaved.length, duplicates.length, needAttention.length);
-        return;
-      }
-
-      if (files.length === 1) {
-        const item = needAttention[0];
-        if (item.error) {
-          showToast('Không đọc được ảnh: ' + item.error, 'error', 3000);
-          return;
-        }
-        const r = item.result;
-        if (r.score.final >= SCORE_REVIEW && r.score.final < SCORE_AUTO_SAVE) {
-          await showReviewModal(item);
-        } else {
-          fillModalFromResult(item);
-        }
-        return;
-      }
-
-      batchResults = needAttention;
-      openBatchOcrModal();
-      showSummaryToast(autoSaved.length, duplicates.length, needAttention.length, 400);
-      return;
-    }
-
-    if (files.length === 1) {
-      const item = results[0];
-
-      if (duplicates.length === 1 && duplicates[0].kind === 'exact') {
-        const r = item.result;
-        showToast(
-          `Ảnh đã tồn tại — ${getTypeLabel(r)} ${formatDateDisplay(r.parsedDate)}: ${r.actualTotal} đơn`,
-          'warning', 2500
-        );
-        return;
-      }
-
-      if (duplicates.length === 1 && duplicates[0].kind === 'same_day') {
-        await openCompareModal(duplicates[0].item, duplicates[0].existing);
-        return;
-      }
-      return;
-    }
-
-    if (autoSaved.length > 0 || duplicates.length > 0) {
-      showSummaryToast(autoSaved.length, duplicates.length, 0);
-    }
-  } catch (err) {
-    if (overlay) overlay.style.display = 'none';
-
-    if (err.message === 'OCR_CANCELLED') {
-      showToast('Đã hủy OCR', 'warning', 2000);
-      return;
-    }
-
-    console.error('[OCR] Pipeline error:', err);
-    showToast('Lỗi khi quét ảnh: ' + err.message, 'error', 3000);
-  } finally {
-    _clearAbortController(ctrl);
   }
+  return out;
 }
 
-// ==================== ENTRY: INPUT FILE ====================
-export async function handleOcrImage(event) {
-  const files = Array.from(event.target.files || []);
-  event.target.value = '';
-  if (files.length === 0) { pendingAppend = false; return; }
-
-  const wasAppend = pendingAppend;
-  pendingAppend = false;
-
-  await _runOcrFromFiles(files, wasAppend);
-}
-
-// ==================== ENTRY: SHARE TARGET ====================
-export async function handleSharedImage(sharedFiles) {
-  const arr = Array.from(sharedFiles || []);
-  if (arr.length === 0) {
-    showToast('Không nhận được ảnh từ chia sẻ', 'warning', 2500);
-    return;
-  }
-
-  const images = arr.filter(f => f && f.type && f.type.startsWith('image/'));
-  const skipped = arr.length - images.length;
-
-  if (images.length === 0) {
-    showToast(
-      skipped > 0 ? 'Chia sẻ không chứa ảnh — bỏ qua' : 'Không có file hợp lệ',
-      'error', 3000
-    );
-    return;
-  }
-
-  if (skipped > 0) {
-    showToast(`Bỏ qua ${skipped} mục không phải ảnh`, 'warning', 2000);
-  }
-
-  await _runOcrFromFiles(images, false);
-}
-
-// ==================== FILL MODAL FROM RESULT ====================
-export function fillModalFromResult(item) {
-  const r = item.result;
-  state.lastOcrImageDataUrl = r.imageBlobUrl || r.fullDataUrl || '';
+// ==================== FILL MODAL ====================
+export function fillModalFromResult(batchItem) {
+  const r = batchItem.result;
+  state.lastOcrImageDataUrl = r.fullDataUrl || '';
   state.isOcrScan = true;
+
+  const distCheck = validateDistribution(r.weights);
+
+  // Build log text — lưu vào module-level
+  const modeStr = r.mode ? `[mode: ${r.mode}]` : '';
+  const sumStr = r.expectedTotal !== null
+    ? `[Sum: ${r.totalFound} / Total: ${r.expectedTotal} — diff: ${Math.abs(r.expectedTotal - r.totalFound)}]`
+    : `[Sum: ${r.totalFound} / Total: (không đọc được)]`;
+  _lastOcrLog = `${modeStr}\n${sumStr}\n\n${r.rawText || '(không có text)'}`;
 
   const debugEl = document.getElementById('ocrDebugText');
   if (debugEl) {
-    const scoreStr = `[Score ${r.score.final} — Total ${r.score.total} / Structure ${r.score.structure} / OCR ${r.score.ocr} / Dist ${r.score.distribution}]`;
-    const checksumStr = `[Checksum ${r.score.checksumOk ? 'OK' : 'FAIL'} — Expected ${r.expectedTotal} vs Actual ${r.actualTotal}]`;
-    const tabStr = `[Tab ${r.detectedColorType || '?'} (conf ${r.tabConfidence || 0}) · ${r.tabMethod || '?'}]`;
-    const attemptStr = `[Attempts ${r.attempts || 1} · ${r.parseMode || '?'}]`;
-    const cropStr = _lastCropLog.length > 0
-      ? '\n--- CROP LOG ---\n' + _lastCropLog.join('\n')
-      : '\n(Crop log trống)';
-    debugEl.innerText = `${scoreStr}\n${checksumStr}\n${tabStr}\n${attemptStr}${cropStr}\n\n${r.rawText || '(không có text)'}`;
+    debugEl.innerText = _lastOcrLog;
     debugEl.style.display = 'none';
-    const toggleBtn = document.getElementById('ocrDebugToggle');
-    if (toggleBtn) {
-      toggleBtn.innerText = 'Xem log';
-
-      if (!document.getElementById('ocrCopyLogBtn')) {
-        const copyBtn = document.createElement('button');
-        copyBtn.id = 'ocrCopyLogBtn';
-        copyBtn.type = 'button';
-        copyBtn.innerText = '📋 Copy log';
-        copyBtn.style.cssText = `
-          background: transparent;
-          border: 1px solid var(--border);
-          color: var(--text-3);
-          font-size: 10px;
-          padding: 4px 10px;
-          border-radius: 6px;
-          cursor: pointer;
-          font-family: inherit;
-          font-weight: 600;
-          margin-left: 6px;
-        `;
-        copyBtn.onclick = () => copyOcrLog();
-        toggleBtn.parentNode.appendChild(copyBtn);
-      }
-    }
   }
 
   openAddModal();
   document.getElementById('inputDate').value = r.parsedDate;
-  switchModalSubTab(r.detectedColorType || 'del');
+  switchModalSubTab(r.detectedColorType);
 
-  const prefix = r.detectedColorType === 'del'  ? 'del_inp'
+  const prefix = r.detectedColorType === 'del' ? 'del_inp'
                : r.detectedColorType === 'pick' ? 'pick_inp'
                : 'ret_inp';
   Object.keys(r.weights).forEach(k => {
@@ -2058,44 +1153,53 @@ export function fillModalFromResult(item) {
     if (el) el.value = r.weights[k];
   });
 
-  applyConfidenceHighlight(r.confidences, r.detectedColorType || 'del');
+  applyConfidenceHighlight(r.confidences, r.detectedColorType);
+
+  // ⭐ Inject nút Copy log cạnh nút Ẩn
+  setTimeout(() => injectCopyLogButton(), 50);
 
   const typeText = getTypeLabel(r);
-  let msg = `${typeText} ${formatDateDisplay(r.parsedDate)} · ${r.actualTotal} đơn`;
-  if (r.expectedTotal !== null && r.actualTotal !== r.expectedTotal) {
-    msg += ` · lệch ${Math.abs(r.expectedTotal - r.actualTotal)}`;
+
+  let msg = `${typeText} ${formatDateDisplay(r.parsedDate)} · ${r.totalFound} đơn`;
+
+  if (r.expectedTotal !== null && r.totalFound !== r.expectedTotal) {
+    msg += ` · lệch ${Math.abs(r.expectedTotal - r.totalFound)}`;
   }
-  msg += ` · Score ${r.score.final}`;
+
+  let lowCount = 0, midCount = 0;
+  Object.values(r.confidences).forEach(c => {
+    if (c == null) return;
+    if (c < 70) lowCount++;
+    else if (c < 85) midCount++;
+  });
 
   let toastType = 'success';
-  if (r.score.final < SCORE_REVIEW) toastType = 'error';
-  else if (r.score.final < SCORE_AUTO_SAVE) toastType = 'warning';
+  if (lowCount > 0) { msg += ' · có dải đỏ'; toastType = 'error'; }
+  else if (midCount > 0) { msg += ' · có dải vàng'; toastType = 'warning'; }
+  if (!distCheck.ok) { msg += ' · ⚠️ phân bố bất thường'; toastType = 'error'; }
 
-  if (r.distWarnings && r.distWarnings.length > 0) {
-    showDistributionWarning(
-      { warnings: r.distWarnings, suspectKeys: r.suspectKeys || [] },
-      r.detectedColorType || 'del'
-    );
+  if (!distCheck.ok) {
+    showDistributionWarning(distCheck, r.detectedColorType);
   }
 
   showToast(msg + ' — kiểm tra và lưu', toastType, 3500);
 }
 
-// ==================== DISTRIBUTION WARNING ====================
 function showDistributionWarning(distCheck, detectedType) {
   const old = document.getElementById('distWarningBanner');
   if (old) old.remove();
 
-  const prefix = detectedType === 'del'  ? 'del_inp'
+  const prefix = detectedType === 'del' ? 'del_inp'
                : detectedType === 'pick' ? 'pick_inp' : 'ret_inp';
 
   const suffixMap = {
     '0_2':'0_2','2_4':'2_4','4_6':'4_6','6_8':'6_8',
     '8_10':'8_10','10_12':'10_12','12_15':'12_15','over_15':'over_15'
   };
-  (distCheck.suspectKeys || []).forEach(k => {
+  distCheck.suspectKeys.forEach(k => {
     const inp = document.getElementById(prefix + '_' + suffixMap[k]);
-    if (inp) inp.classList.add('conf-suspect');
+    if (!inp) return;
+    inp.classList.add('conf-suspect');
   });
 
   const banner = document.createElement('div');
@@ -2125,7 +1229,7 @@ function buildCompareText(ocrW, existingW) {
     '0_2':'>0-2kg','2_4':'>2-4','4_6':'>4-6','6_8':'>6-8',
     '8_10':'>8-10','10_12':'>10-12','12_15':'>12-15','over_15':'>15'
   };
-  const diffs = [];
+  let diffs = [];
   let matches = 0;
   Object.keys(suffixToWeight).forEach(k => {
     const ocr = parseInt(ocrW[k], 10) || 0;
@@ -2140,22 +1244,19 @@ function buildCompareText(ocrW, existingW) {
   };
 }
 
-export async function openCompareModal(batchItem, existingRecord) {
+export function openCompareModal(batchItem, existingRecord) {
   const r = batchItem.result;
   const type = getTypeFromResult(r);
-  if (!type) {
-    fillModalFromResult(batchItem);
-    return;
-  }
 
   openEditModal(type, existingRecord.id);
 
   setTimeout(async () => {
     const previewBox = document.getElementById('ocrPreviewBox');
     const previewImg = document.getElementById('ocrPreviewImg');
-    if (previewBox && previewImg && (r.imageBlobUrl || r.fullDataUrl)) {
-      previewImg.src = r.imageBlobUrl || r.fullDataUrl;
+    if (previewBox && previewImg && r.fullDataUrl) {
+      previewImg.src = r.fullDataUrl;
       previewBox.style.display = 'block';
+      injectCopyLogButton();
     }
     const cmp = buildCompareText(r.weights, existingRecord.weights);
     const dateStr = formatDateDisplay(r.parsedDate);
@@ -2166,10 +1267,6 @@ export async function openCompareModal(batchItem, existingRecord) {
     await showAlert(msg, { title: 'So sánh OCR', okText: 'Đã hiểu' });
   }, 200);
 }
-
-// ==================== BATCH STATE ====================
-let batchResults = [];
-let pendingAppend = false;
 
 // ==================== BATCH MODAL ====================
 export function openBatchOcrModal() {
@@ -2188,21 +1285,13 @@ function renderBatchList() {
   const list = document.getElementById('batchList');
   list.innerHTML = '';
   document.getElementById('batchCount').innerText = batchResults.length;
-
   if (batchResults.length === 0) {
     list.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-3);font-size:12px">Không có ảnh nào.</div>';
     return;
   }
-
-  const typeMap = {
-    del:  ['Giao', 'tag-delivery'],
-    pick: ['Lấy',  'tag-pickup'],
-    ret:  ['Hoàn', 'tag-return']
-  };
-
+  const typeMap = { del: ['Giao', 'tag-delivery'], pick: ['Lấy', 'tag-pickup'], ret: ['Hoàn', 'tag-return'] };
   batchResults.forEach((item, idx) => {
     const div = document.createElement('div');
-
     if (item.error) {
       div.className = 'batch-item error';
       div.innerHTML = `
@@ -2216,56 +1305,42 @@ function renderBatchList() {
         </div>`;
     } else {
       const r = item.result;
-      const score = r.score.final;
-      const scoreIcon = score >= SCORE_AUTO_SAVE ? '🟢'
-                       : score >= SCORE_REVIEW    ? '🟡'
-                       : '🔴';
-      const checksumIcon = r.score.checksumOk ? '' : ' ⚠️';
-      const distIcon = (r.distWarnings && r.distWarnings.length > 0) ? ' 🟠' : '';
+      const [typeLabel, typeClass] = typeMap[r.detectedColorType];
+      let lowCount = 0, midCount = 0;
+      Object.values(r.confidences).forEach(c => {
+        if (c == null) return;
+        if (c < 70) lowCount++;
+        else if (c < 85) midCount++;
+      });
+      const distCheck = validateDistribution(r.weights);
+      const confIcon  = lowCount > 0 ? ' 🔴' : midCount > 0 ? ' 🟡' : ' 🟢';
+      const warnIcon  = (r.expectedTotal !== null && r.totalFound !== r.expectedTotal) ? ' ⚠️' : '';
+      const distIcon  = !distCheck.ok ? ' 🟠' : '';
       const cacheIcon = item.fromCache ? ' ⚡' : '';
-
-      let typeLabel = '?', typeClass = 'tag-delivery';
-      if (r.detectedColorType && typeMap[r.detectedColorType]) {
-        [typeLabel, typeClass] = typeMap[r.detectedColorType];
-      }
-
       const type = getTypeFromResult(r);
-      const existing = type ? state.appData[type].find(rec => rec.date === r.parsedDate) : null;
-
-      let actionBtn;
-      if (!r.detectedColorType) {
-        actionBtn = `<button class="batch-btn batch-btn-import" onclick="importBatchItem(${idx})">📝 Chọn loại</button>`;
-      } else if (existing) {
-        actionBtn = `<button class="batch-btn batch-btn-compare" onclick="importBatchItem(${idx})">🔍 So sánh</button>`;
-      } else {
-        actionBtn = `<button class="batch-btn batch-btn-import" onclick="importBatchItem(${idx})">📝 Nhập</button>`;
-      }
-
+      const existing = state.appData[type].find(rec => rec.date === r.parsedDate);
+      const actionBtn = existing
+        ? `<button class="batch-btn batch-btn-compare" onclick="importBatchItem(${idx})">🔍 So sánh</button>`
+        : `<button class="batch-btn batch-btn-import" onclick="importBatchItem(${idx})">📝 Nhập</button>`;
       const existingBadge = existing
         ? ` <span style="font-size:9px;padding:1px 6px;border-radius:4px;background:var(--warning-bg);border:1px solid var(--warning-bd);color:var(--warning);font-weight:700">Đã có</span>`
         : '';
-
       div.className = 'batch-item';
       div.innerHTML = `
         <img class="batch-thumb" src="${item.thumbnail}" alt="">
         <div class="batch-info">
           <div class="batch-title">
             <span class="hist-badge-tag ${typeClass}">${typeLabel}</span>
-            <span>${formatDateDisplay(r.parsedDate)} ${scoreIcon}${checksumIcon}${distIcon}${cacheIcon}${existingBadge}</span>
+            <span>${formatDateDisplay(r.parsedDate)}${confIcon}${warnIcon}${distIcon}${cacheIcon}${existingBadge}</span>
           </div>
           <div class="batch-meta">${escapeHtml(item.file)}</div>
-          <div class="batch-total">
-            ${r.actualTotal} đơn
-            ${r.expectedTotal !== null ? `<span style="color:var(--text-3);font-weight:500;font-size:11px"> (tổng ảnh: ${r.expectedTotal})</span>` : ''}
-            <span style="color:var(--text-3);font-weight:500;font-size:11px"> · Score ${score}</span>
-          </div>
+          <div class="batch-total">${r.totalFound} đơn</div>
         </div>
         <div class="batch-actions">
           ${actionBtn}
           <button class="batch-btn batch-btn-remove" onclick="removeBatchItem(${idx})">Bỏ</button>
         </div>`;
     }
-
     list.appendChild(div);
   });
 }
@@ -2276,32 +1351,15 @@ export function removeBatchItem(idx) {
   renderBatchList();
 }
 
-export async function importBatchItem(idx) {
+export function importBatchItem(idx) {
   const item = batchResults[idx];
   if (!item || item.error) return;
   const r = item.result;
-
-  closeBatchOcrModal();
-
-  if (!r.detectedColorType) {
-    const type = await showTabPickerModal();
-    if (type === null) {
-      openBatchOcrModal();
-      return;
-    }
-    r.detectedColorType = type;
-    r.tabConfidence = 100;
-    r.tabMethod = 'user-picker';
-  }
-
   const type = getTypeFromResult(r);
-  const existing = type ? state.appData[type].find(rec => rec.date === r.parsedDate) : null;
-
-  if (existing) {
-    await openCompareModal(item, existing);
-  } else {
-    fillModalFromResult(item);
-  }
+  const existing = state.appData[type].find(rec => rec.date === r.parsedDate);
+  closeBatchOcrModal();
+  if (existing) openCompareModal(item, existing);
+  else fillModalFromResult(item);
   showBackToBatchBtn(true);
 }
 
@@ -2316,12 +1374,10 @@ export function backToBatch() {
   showBackToBatchBtn(false);
   openBatchOcrModal();
 }
-
 export function showBackToBatchBtn(show) {
   const btn = document.getElementById('backToBatchBtn');
   if (btn) btn.style.display = show ? 'inline-flex' : 'none';
 }
-
 export function hasBatchPending() { return batchResults.length > 0; }
 
 // ==================== SAVE BATCH ====================
@@ -2332,12 +1388,9 @@ export async function saveBatchAll() {
   const seenInBatch = new Set();
   const dedupedBatch = [];
   let dupInBatch = 0;
-
   valid.forEach(item => {
     const r = item.result;
-    const type = getTypeFromResult(r);
-    if (!type) { dupInBatch++; return; }
-    const key = type + '|' + r.parsedDate;
+    const key = getTypeFromResult(r) + '|' + r.parsedDate;
     if (seenInBatch.has(key)) { dupInBatch++; return; }
     seenInBatch.add(key);
     dedupedBatch.push(item);
@@ -2345,19 +1398,20 @@ export async function saveBatchAll() {
 
   const finalList = [];
   let dupExisting = 0;
-
+  let suspectSkipped = 0;
   dedupedBatch.forEach(item => {
     const r = item.result;
     const type = getTypeFromResult(r);
-    if (!type) { dupInBatch++; return; }
+    const existing = state.appData[type].find(rec => rec.date === r.parsedDate);
+    if (existing) { dupExisting++; return; }
 
-    if (findExactDuplicate(r)) { dupExisting++; return; }
-    if (findSameDaySameType(r)) { dupExisting++; return; }
+    const dist = validateDistribution(r.weights);
+    if (!dist.ok) { suspectSkipped++; return; }
 
     finalList.push({ item, type, weights: buildWeights(r) });
   });
 
-  const totalSkipped = dupInBatch + dupExisting;
+  const totalSkipped = dupInBatch + dupExisting + suspectSkipped;
 
   if (finalList.length === 0) {
     let msg = 'Không có gì để lưu';
@@ -2394,15 +1448,21 @@ export async function saveBatchAll() {
 
   let doneMsg = `Đã lưu ${finalList.length} bản ghi`;
   if (totalSkipped > 0) doneMsg += ` (bỏ qua ${totalSkipped} ảnh)`;
+  if (suspectSkipped > 0) doneMsg += ` · ⚠️ ${suspectSkipped} nghi ngờ`;
   showToast(doneMsg, 'success', 3000);
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({
+    '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
+  }[c]));
 }
 
 // ==================== HIGHLIGHT ====================
 export function applyConfidenceHighlight(confMap, detectedType) {
-  const prefix = detectedType === 'del'  ? 'del_inp'
+  const prefix = detectedType === 'del' ? 'del_inp'
                : detectedType === 'pick' ? 'pick_inp' : 'ret_inp';
   const keys = ['0_2','2_4','4_6','6_8','8_10','10_12','12_15','over_15'];
-
   keys.forEach(k => {
     const input = document.getElementById(prefix + '_' + k);
     if (!input) return;
@@ -2413,11 +1473,9 @@ export function applyConfidenceHighlight(confMap, detectedType) {
       if (old) old.remove();
     }
     if (confMap[k] == null) return;
-
     const conf = confMap[k];
     const level = conf >= 85 ? 'high' : conf >= 70 ? 'mid' : 'low';
     input.classList.add('conf-' + level);
-
     if (parent) {
       const badge = document.createElement('span');
       badge.className = 'conf-badge ' + level;
@@ -2449,14 +1507,6 @@ export function openOcrLightbox() {
   document.getElementById('ocrLightboxImg').src = src;
   document.getElementById('ocrLightbox').classList.add('active');
 }
-
 export function closeOcrLightbox() {
   document.getElementById('ocrLightbox').classList.remove('active');
-}
-
-// ==================== ESCAPE HTML ====================
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, c => ({
-    '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
-  }[c]));
 }
