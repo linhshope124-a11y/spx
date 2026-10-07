@@ -18,7 +18,7 @@ const LS_CACHE_PREFIX   = 'spx_ocr_cache_';
 const LS_CACHE_INDEX    = 'spx_ocr_cache_index';
 const LS_CACHE_MAX_BYTES = 4 * 1024 * 1024;
 
-const SCORE_AUTO_SAVE = 92;
+const SCORE_AUTO_SAVE = 999;
 const SCORE_REVIEW    = 85;
 const SCORE_MAX_CHECKSUM_FAIL = 84;
 
