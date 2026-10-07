@@ -113,12 +113,7 @@ async function handleShareTarget(request) {
   return Response.redirect(redirectUrl, 303);
 }
 
-// ==================== STATIC ASSET DETECT (v50.11.11) ====================
-/**
- * Kiểm tra URL có phải static asset không (để dùng cache-first).
- * Static: .html, .css, .js, ảnh, font, icon
- * Không static: version.json (network-only), share-target, API calls
- */
+// ==================== STATIC ASSET DETECT ====================
 function _isStaticAsset(pathname) {
   if (pathname.endsWith('/version.json')) return false;
   return /\.(html|css|js|png|jpg|jpeg|svg|webp|gif|ico|woff|woff2|ttf|otf)$/i.test(pathname);
@@ -147,14 +142,12 @@ self.addEventListener('fetch', e => {
     return;
   }
 
-  // Static assets → CACHE-FIRST (v50.11.11)
-  // → Mở app tức thì, không chờ network
+  // Static assets → CACHE-FIRST
   if (_isStaticAsset(url.pathname)) {
     e.respondWith(
       caches.match(req, { ignoreSearch: true }).then(cached => {
         if (cached) return cached;
 
-        // Cache miss → fetch network + lưu cache
         return fetch(req)
           .then(res => {
             if (res && res.status === 200) {
@@ -169,7 +162,7 @@ self.addEventListener('fetch', e => {
     return;
   }
 
-  // Còn lại → network-first (như cũ)
+  // Còn lại → network-first
   e.respondWith(
     fetch(req)
       .then(res => {
