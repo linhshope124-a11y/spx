@@ -1,4 +1,4 @@
-const CACHE = 'spx-tracker-v538';
+const CACHE = 'spx-tracker-v539';
 const SHARE_CACHE = 'spx-shared-files';
 
 const CORE = [
@@ -61,7 +61,7 @@ self.addEventListener('message', e => {
   }
 });
 
-// ==================== SHARE TARGET (SPX-F) ====================
+// ==================== SHARE TARGET ====================
 async function handleShareTarget(request) {
   try {
     const formData = await request.formData();
@@ -113,6 +113,17 @@ async function handleShareTarget(request) {
   return Response.redirect(redirectUrl, 303);
 }
 
+// ==================== STATIC ASSET DETECT (v50.11.11) ====================
+/**
+ * Kiểm tra URL có phải static asset không (để dùng cache-first).
+ * Static: .html, .css, .js, ảnh, font, icon
+ * Không static: version.json (network-only), share-target, API calls
+ */
+function _isStaticAsset(pathname) {
+  if (pathname.endsWith('/version.json')) return false;
+  return /\.(html|css|js|png|jpg|jpeg|svg|webp|gif|ico|woff|woff2|ttf|otf)$/i.test(pathname);
+}
+
 // ==================== FETCH ====================
 self.addEventListener('fetch', e => {
   const req = e.request;
@@ -130,11 +141,35 @@ self.addEventListener('fetch', e => {
   if (req.method !== 'GET') return;
   if (url.origin !== self.location.origin) return;
 
+  // version.json → luôn network (no-store)
   if (url.pathname.endsWith('/version.json')) {
     e.respondWith(fetch(req, { cache: 'no-store' }));
     return;
   }
 
+  // Static assets → CACHE-FIRST (v50.11.11)
+  // → Mở app tức thì, không chờ network
+  if (_isStaticAsset(url.pathname)) {
+    e.respondWith(
+      caches.match(req, { ignoreSearch: true }).then(cached => {
+        if (cached) return cached;
+
+        // Cache miss → fetch network + lưu cache
+        return fetch(req)
+          .then(res => {
+            if (res && res.status === 200) {
+              const copy = res.clone();
+              caches.open(CACHE).then(c => c.put(req, copy));
+            }
+            return res;
+          })
+          .catch(() => caches.match('./index.html'));
+      })
+    );
+    return;
+  }
+
+  // Còn lại → network-first (như cũ)
   e.respondWith(
     fetch(req)
       .then(res => {
