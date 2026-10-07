@@ -4,15 +4,21 @@ import { lookupTier, aggregateWeights, isDateInCurrentPeriod } from './calc.js';
 import { formatPts, formatDateDisplay, _fmt, getCurrentMonthIso, getTodayIso } from './utils.js';
 
 const NEED_HIGHLIGHT = 'color:#dc2626;font-size:1.35em;font-weight:900;letter-spacing:0.5px;';
-const TOP_OVERVIEW_COUNT = 4;   // v50.11.8: hiện top 4 ở card chính
+const TOP_OVERVIEW_COUNT = 4;
+
+// v50.11.10: Dải nặng — ẩn gợi ý khi đã có ≥1 đơn (không thể đủ để lên mốc tiếp)
+const HEAVY_WEIGHT_KEYS = ['10_12', '12_15', 'over_15'];
+
+// Map col (0-7) → weightKey
+const SUFFIX_BY_COL = ['0_2', '2_4', '4_6', '6_8', '8_10', '10_12', '12_15', 'over_15'];
 
 let _lastDataHash = null;
 
-// v50.11.8: state filter cho modal "Xem tất cả"
+// state filter cho modal "Xem tất cả"
 let _allOppFilter = 'del';
-let _allOppCache = [];          // cache toàn bộ suggestions đã sort
+let _allOppCache = [];
 
-// ==================== v50.11.0: SPX-H HISTORY FILTERS ====================
+// ==================== HISTORY FILTERS ====================
 const DEFAULT_HIST_FILTERS = {
   dateFrom: null,
   dateTo: null,
@@ -150,10 +156,10 @@ function recordPassesFilters(r, type) {
 
   return true;
 }
-// ==================== /SPX-H HISTORY FILTERS ====================
+// ==================== /HISTORY FILTERS ====================
 
 
-// ==================== v50.9.0: REMINDER BANNER ====================
+// ==================== REMINDER BANNER ====================
 function computeMissedDays() {
   const allDates = [
     ...state.appData.delivery.map(r => r.date),
@@ -382,24 +388,50 @@ function renderRow(weightLabel, orders, tier, typeClass) {
 }
 
 /**
- * Trả về object { type, need, gain, html } để sort + filter.
+ * v50.11.10: Build suggestion với rule mới.
+ * - Giao: cho phép orders=0 (cơ hội vàng — nhập 1 đơn ăn ngay điểm mốc đầu)
+ * - Lấy/Hoàn: bắt buộc orders > 0
+ * - Dải nặng (10-12, 12-15, >15): ẩn khi đã có ≥1 đơn (không thể lên mốc tiếp)
+ *
+ * @returns {{ type, need, gain, hasPoint, weightKey, html } | null}
  */
-function buildOverviewSuggestion(type, label, orders, tier) {
-  if (orders <= 0 || !tier.next || !isFinite(tier.matched.maxA)) return null;
-  const need  = tier.matched.maxA - orders;
-  const gain  = tier.next.pt - tier.matched.pt;
+function buildOverviewSuggestion(type, label, orders, tier, weightKey) {
+  const isZero = orders === 0;
+
+  // Rule 1: Lấy/Hoàn không hiện dải 0 đơn
+  if (isZero && type !== 'del') return null;
+
+  // Rule 2: Dải nặng có ≥1 đơn → ẩn (cả 3 loại)
+  if (!isZero && HEAVY_WEIGHT_KEYS.includes(weightKey)) return null;
+
+  // Không có mốc tiếp → ẩn
+  if (!tier.next || !isFinite(tier.matched.maxA)) return null;
+
+  // Tính need / gain
+  const need = isZero
+    ? (tier.next.min || 1)                       // 0 đơn → cần = min của mốc đầu
+    : (tier.matched.maxA - orders);              // có đơn → cần = max - hiện tại
+  const gain = isZero
+    ? tier.next.pt                               // 0 đơn → được = điểm mốc đầu
+    : (tier.next.pt - tier.matched.pt);          // có đơn → được = chênh lệch
+
+  // Chưa có điểm? (0 đơn hoặc đơn < mốc 1)
+  const hasPoint = orders > 0 && tier.matched.pt > 0;
+
   const badge = type === 'del' ? 'G' : type === 'pick' ? 'L' : 'H';
   const cls   = type === 'del' ? 'sugg-del'  : type === 'pick' ? 'sugg-pick'  : 'sugg-ret';
   const bcls  = type === 'del' ? 'sugg-type-del' : type === 'pick' ? 'sugg-type-pick' : 'sugg-type-ret';
+
   const html = `<div class="suggestion-item ${cls}">
     <div class="sugg-left"><h4><span class="sugg-type-badge ${bcls}">${badge}</span> ${label} · ${_fmt(orders)} đơn</h4>
     <p>Thêm <b style="${NEED_HIGHLIGHT}">+${_fmt(need)}</b> đơn đạt ${tier.next.range}</p></div>
     <div class="sugg-points">+${formatPts(gain)}</div>
   </div>`;
-  return { type, need, gain, html };
+
+  return { type, need, gain, hasPoint, weightKey, html };
 }
 
-// ==================== RENDER OVERVIEW SUGGESTIONS (Top 4) ====================
+// ==================== RENDER OVERVIEW SUGGESTIONS ====================
 function renderOverviewSuggestions(sorted) {
   const ovBox = document.getElementById('overviewMilestoneList');
   const btnViewAll = document.getElementById('viewAllOpportunitiesBtn');
@@ -482,22 +514,34 @@ function _updateAllViews() {
     pickTbody.insertAdjacentHTML('beforeend', `<tr>${renderRow(WEIGHT_LABELS[col], pOrders, pTier, 'pickup-num')}</tr>`);
     retTbody.insertAdjacentHTML('beforeend',  `<tr>${renderRow(WEIGHT_LABELS[col], rOrders, rTier, 'return-num')}</tr>`);
 
-    const o1 = buildOverviewSuggestion('del',  WEIGHT_LABELS[col], dOrders, dTier); if (o1) ovSuggBuf.push(o1);
-    const o2 = buildOverviewSuggestion('pick', WEIGHT_LABELS[col], pOrders, pTier); if (o2) ovSuggBuf.push(o2);
-    const o3 = buildOverviewSuggestion('ret',  WEIGHT_LABELS[col], rOrders, rTier); if (o3) ovSuggBuf.push(o3);
+    const wKey = SUFFIX_BY_COL[col];
+
+    const o1 = buildOverviewSuggestion('del',  WEIGHT_LABELS[col], dOrders, dTier, wKey); if (o1) ovSuggBuf.push(o1);
+    const o2 = buildOverviewSuggestion('pick', WEIGHT_LABELS[col], pOrders, pTier, wKey); if (o2) ovSuggBuf.push(o2);
+    const o3 = buildOverviewSuggestion('ret',  WEIGHT_LABELS[col], rOrders, rTier, wKey); if (o3) ovSuggBuf.push(o3);
   }
 
-  // Sort: need tăng dần, tie-break gain giảm dần
+  // v50.11.10: Sort 3 tầng
+  //  - Tầng 1: chưa có điểm lên trước (dải 0 đơn hoặc chưa đạt mốc)
+  //  - Tầng 2: trong nhóm chưa điểm → gain↓ (điểm cao lên đầu), tie-break need↑
+  //  - Tầng 3: trong nhóm có điểm → need↑, tie-break gain↓
   ovSuggBuf.sort((a, b) => {
+    if (a.hasPoint !== b.hasPoint) return a.hasPoint ? 1 : -1;
+
+    if (!a.hasPoint && !b.hasPoint) {
+      if (a.gain !== b.gain) return b.gain - a.gain;
+      if (a.need !== b.need) return a.need - b.need;
+      return 0;
+    }
+
     if (a.need !== b.need) return a.need - b.need;
     if (a.gain !== b.gain) return b.gain - a.gain;
     return 0;
   });
 
-  // Cache toàn bộ để modal "Xem tất cả" dùng
   _allOppCache = ovSuggBuf;
 
-  // Render top 4 ở card chính (không giới hạn loại)
+  // Render top 4 ở card chính
   if (total.del + total.pick + total.ret === 0) {
     const ovBox = document.getElementById('overviewMilestoneList');
     const btnViewAll = document.getElementById('viewAllOpportunitiesBtn');
@@ -621,7 +665,6 @@ function _updateAllViews() {
     ? Math.min(100, Math.round((displayDays / salaryDays) * 100))
     : 0;
 
-  // v50.11.8: hiện % cạnh "x/26 công"
   if (incomeDayCount) {
     incomeDayCount.innerText = `${workDaysText}/${salaryDays} công · ${progressPct}%`;
   }
@@ -667,7 +710,7 @@ export function updateAllViews() {
   _updateAllViews_debounced();
 }
 
-// ==================== UPDATE CHIP SUMMARY (SPX-H) ====================
+// ==================== UPDATE CHIP SUMMARY ====================
 function updateHistFilterSummaryUI() {
   const summary = document.getElementById('histFilterSummary');
   const chipsBox = document.getElementById('histFilterSummaryChips');
