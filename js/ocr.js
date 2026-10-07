@@ -1,5 +1,5 @@
 // =============================================================
-// OCR ENGINE v2.8 — PART 1/3
+// OCR ENGINE v3.0 — PART 1/3
 // Config · AbortController · Worker · Cache
 // =============================================================
 
@@ -11,17 +11,25 @@ import { updateAllViews } from './render.js';
 import { showAlert, showConfirm } from './dialog.js';
 
 // ==================== CONFIG ====================
-const OCR_CACHE_VERSION = 'v4';
+const OCR_CACHE_VERSION = 'v5';
 const OCR_TIMEOUT_MS    = 30000;
 const OCR_CACHE_MAX     = 200;
 const LS_CACHE_PREFIX   = 'spx_ocr_cache_';
 const LS_CACHE_INDEX    = 'spx_ocr_cache_index';
 const LS_CACHE_MAX_BYTES = 4 * 1024 * 1024;
 
-// Auto-save khi score >= 92
 const SCORE_AUTO_SAVE = 92;
 const SCORE_REVIEW    = 85;
 const SCORE_MAX_CHECKSUM_FAIL = 84;
+
+// v3.0 — Crop-based config
+const CARD_REGION_TOP_PCT    = 0.22;  // bắt đầu vùng cards (sau "Tổng N")
+const CARD_REGION_BOTTOM_PCT = 0.92;  // kết thúc vùng cards (trước nav bar)
+const CARD_NUM_CROP_X1_PCT   = 0.45;  // crop số: từ 45% width
+const CARD_NUM_CROP_X2_PCT   = 0.95;  // đến 95% width
+const CARD_NUM_CROP_Y1_PCT   = 0.05;  // từ 5% card height
+const CARD_NUM_CROP_Y2_PCT   = 0.50;  // đến 50% card height
+const CARD_NUM_UPSCALE       = 4;      // upscale 4x cho crop nhỏ
 
 const RANGE_KEY_BY_MIN = {
   0: '0_2',   2: '2_4',    4: '4_6',    6: '6_8',
@@ -387,8 +395,8 @@ export function getOcrCacheStats() {
   };
 }
 // =============================================================
-// OCR ENGINE v2.8 — PART 2/3
-// Image · Preprocess · Parser · Validation · Scoring
+// OCR ENGINE v3.0 — PART 2/3
+// Image · Tab · Card Crop · Preprocess · Parser · Validation · Scoring
 // =============================================================
 
 // ==================== IMAGE HELPERS ====================
@@ -513,21 +521,7 @@ function detectActiveTab(imageSource) {
           }
         }
 
-        console.log('[OCR Tab]', {
-          imgW: img.width, imgH: img.height,
-          tabYRange: [tabY1, tabY2],
-          camYRange: [camY1, camY2],
-          tabClusters: tabCandidates.length,
-          clusterWidths: tabCandidates.map(c => c.end - c.start),
-          totalOrange,
-          orangeColsFound: colOrange.filter(v => v > 0).length
-        });
-
-        if (totalOrange < 30) {
-          console.warn('[OCR Tab] totalOrange quá thấp → fail');
-          resolve(null);
-          return;
-        }
+        if (totalOrange < 30) { resolve(null); return; }
 
         const winSize = 40;
         let maxSum = 0, bestCenter = 0;
@@ -573,15 +567,6 @@ function detectActiveTab(imageSource) {
             conf -= Math.max(0, 30 - separation * 500);
             const confidence = Math.max(0, Math.min(100, Math.round(conf)));
 
-            console.log('[OCR Tab] match:', {
-              bestIdx, bestCenter,
-              tabCenters: sorted.map(c => Math.round((c.start + c.end) / 2)),
-              bestDist: Math.round(bestDist),
-              secondDist: Math.round(secondDist),
-              separation: separation.toFixed(3),
-              confidence
-            });
-
             if (confidence >= TAB_MIN_CONFIDENCE) {
               resolve({
                 type: TAB_ORDER[bestIdx],
@@ -601,12 +586,7 @@ function detectActiveTab(imageSource) {
         if (!fallbackType) fallbackType = 'del';
 
         const fallbackConf = 65;
-        console.log('[OCR Tab] fallback:', { rel: rel.toFixed(3), fallbackType, fallbackConf });
-
-        if (fallbackConf < TAB_MIN_CONFIDENCE) {
-          resolve(null);
-          return;
-        }
+        if (fallbackConf < TAB_MIN_CONFIDENCE) { resolve(null); return; }
 
         resolve({
           type: fallbackType,
@@ -716,27 +696,6 @@ function _binarize(gray, threshold) {
   return out;
 }
 
-async function preprocessPass1(rawDataUrl, signal) {
-  _checkAborted(signal);
-  const img = await loadImage(rawDataUrl);
-  const { ctx, canvas } = _drawToCanvas(img, 2.0);
-
-  const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  const gray    = _toGrayscale(imgData.data);
-  const contrast = _applyContrast(gray, 0.02, 0.98);
-
-  const out = new Uint8ClampedArray(contrast.length * 4);
-  for (let i = 0, j = 0; i < contrast.length; i++, j += 4) {
-    out[j]   = contrast[i];
-    out[j+1] = contrast[i];
-    out[j+2] = contrast[i];
-    out[j+3] = 255;
-  }
-  ctx.putImageData(new ImageData(out, canvas.width, canvas.height), 0, 0);
-
-  return canvas.toDataURL('image/png');
-}
-
 async function preprocessPass2(rawDataUrl, signal) {
   _checkAborted(signal);
   const img = await loadImage(rawDataUrl);
@@ -766,11 +725,88 @@ async function preprocessPass3(rawDataUrl, fixedThreshold, signal) {
   return canvas.toDataURL('image/png');
 }
 
-// ==================== PARSE ====================
+// ==================== v3.0: CARD DETECTION + CROP ====================
+/**
+ * Chia vùng cards dựa trên số cards (= số ranges OCR đọc được)
+ * Giả định: SPX render cards đều nhau từ 22% → 92% chiều cao
+ */
+function computeCardRegions(imgHeight, numCards) {
+  if (!Number.isFinite(numCards) || numCards < 1 || numCards > 8) return [];
+
+  const startY = Math.floor(imgHeight * CARD_REGION_TOP_PCT);
+  const endY   = Math.floor(imgHeight * CARD_REGION_BOTTOM_PCT);
+  const totalH = endY - startY;
+  const cardH  = Math.floor(totalH / numCards);
+
+  const cards = [];
+  for (let i = 0; i < numCards; i++) {
+    cards.push({
+      top: startY + i * cardH,
+      bottom: startY + (i + 1) * cardH,
+      height: cardH,
+      idx: i
+    });
+  }
+  return cards;
+}
 
 /**
- * TẦNG 2: Fix chữ cái lẫn trong dải khối lượng.
+ * OCR 1 card — crop vùng số bên phải + upscale 4x + OCR riêng
+ * @returns {Promise<number|null>}
  */
+async function ocrCardNumber(imageSource, card, signal) {
+  _checkAborted(signal);
+
+  const img = await loadImage(imageSource);
+  const canvas = document.createElement('canvas');
+
+  const cardH = card.height;
+
+  const cropY1 = card.top + Math.floor(cardH * CARD_NUM_CROP_Y1_PCT);
+  const cropY2 = card.top + Math.floor(cardH * CARD_NUM_CROP_Y2_PCT);
+  const cropX1 = Math.floor(img.width * CARD_NUM_CROP_X1_PCT);
+  const cropX2 = Math.floor(img.width * CARD_NUM_CROP_X2_PCT);
+
+  const cropW = cropX2 - cropX1;
+  const cropH = cropY2 - cropY1;
+
+  if (cropW < 20 || cropH < 10) return null;
+
+  const scale = CARD_NUM_UPSCALE;
+  canvas.width  = cropW * scale;
+  canvas.height = cropH * scale;
+
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(img, cropX1, cropY1, cropW, cropH, 0, 0, canvas.width, canvas.height);
+
+  const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const gray = _toGrayscale(imgData.data);
+  const contrast = _applyContrast(gray, 0.02, 0.98);
+  const threshold = _otsuThreshold(contrast);
+  const bin = _binarize(contrast, threshold);
+  ctx.putImageData(new ImageData(bin, canvas.width, canvas.height), 0, 0);
+
+  const processedDataUrl = canvas.toDataURL('image/png');
+
+  _checkAborted(signal);
+
+  const text = await ocrRecognize(processedDataUrl, signal);
+  console.log(`[OCR v3] Card ${card.idx}:`, text.trim().replace(/\n/g, ' | '));
+
+  const m = text.match(/\d{1,6}/);
+  if (!m) return null;
+
+  const num = parseInt(m[0], 10);
+  if (!Number.isFinite(num) || num < 0 || num > 99999) return null;
+
+  return num;
+}
+// ==================== /CARD DETECTION + CROP ====================
+
+
+// ==================== PARSE ====================
 function fixWeightRanges(text) {
   const RANGE_CHAR = '[0-9OoQlI|ZzSsGB]';
   const pattern = new RegExp(
@@ -811,6 +847,9 @@ function normalizeOcrText(text) {
 
     .replace(/(Ì|Í|I|l|\|)(\s*)(?=Đơn\s*hàng)/gi, '1$2')
 
+    // Tách số dính "Đơnh": "2Đơnh8.001" → "2 Đơn hàng 8.001"
+    .replace(/(\d+)\s*[đĐ][ơơọo]nh(?=\d)/gi, '$1 Đơn hàng ')
+
     // TẦNG 1 — Fix 8 case chữ cái → số trước "Đơn hàng"
     .replace(/([Zz])(\s*)(?=Đơn\s*hàng)/g, '2$2')
     .replace(/([Ss])(\s*)(?=Đơn\s*hàng)/g, '5$2')
@@ -821,11 +860,15 @@ function normalizeOcrText(text) {
     .replace(/([AH])(\s*)(?=Đơn\s*hàng)/g, '4$2')
     .replace(/([T])(\s*)(?=Đơn\s*hàng)/g, '7$2')
 
+    // Biến thể "Đgï", "Đgì"
+    .replace(/[đĐ]g[ïi]n?h?/gi, 'Đơn hàng')
+    .replace(/[đĐ][ơơọo]g[ïi]/gi, 'Đơn hàng')
+
     .replace(/[đĐ][ơơọo]n\s*h[àaàáạảãêềếệểễ]ng?/gi, 'Đơn hàng')
     .replace(/[đĐ][ơơọo]n\s*h[ềếệểễ]\b/gi, 'Đơn hàng')
     .replace(/[đĐ][ơơọo]n\s*h\b/gi, 'Đơn hàng')
-    .replace(/[đĐ][ơơọo]nh\b/gi, 'Đơn hàng')
-    .replace(/[đĐ]nh\b/gi, 'Đơn hàng')
+    .replace(/[đĐ][ơơọo]nh(?=\d|\s|$)/gi, 'Đơn hàng')
+    .replace(/[đĐ]nh(?=\d|\s|$)/gi, 'Đơn hàng')
     .replace(/[đĐ]n\s*h[àa]ng/gi, 'Đơn hàng')
     .replace(/[đĐ]n\s*h\b/gi, 'Đơn hàng')
     .replace(/\bDon\s*hang?/gi, 'Đơn hàng')
@@ -931,17 +974,24 @@ function parseBlockBased(text) {
   while ((m = rangeRegex.exec(text)) !== null) {
     const pos = m.index;
     const lineIdx = lineOffsets.findIndex(o => pos >= o.start && pos < o.end);
+    const key = mapRangeToKey(m[1], m[2]);
     ranges.push({
       minStr: m[1],
       maxStr: m[2],
+      key,
       pos:    m.index,
       endPos: m.index + m[0].length,
       lineIdx
     });
   }
 
+  // v3.0: Track ranges in order (chỉ valid keys)
+  const rangesInOrder = ranges
+    .filter(r => r.key !== null)
+    .map(r => ({ key: r.key, minStr: r.minStr, maxStr: r.maxStr }));
+
   if (ranges.length === 0) {
-    return { weights, detectedRanges: 0, parseMode: 'block-empty' };
+    return { weights, detectedRanges: 0, parseMode: 'block-empty', rangesInOrder: [] };
   }
 
   const totalRegex = /Tổng\s*[:\-]?\s*\d{1,6}\s*Đơn\s*hàng/gi;
@@ -955,8 +1005,7 @@ function parseBlockBased(text) {
   const usedMatches = new Set();
 
   ranges.forEach(r => {
-    const key = mapRangeToKey(r.minStr, r.maxStr);
-    if (!key) return;
+    if (!r.key) return;
     if (r.lineIdx === -1) return;
 
     const searchStart = Math.max(0, r.lineIdx - LINE_WINDOW);
@@ -986,8 +1035,8 @@ function parseBlockBased(text) {
       }
     }
 
-    if (best && weights[key] === 0) {
-      weights[key] = best.value;
+    if (best && weights[r.key] === 0) {
+      weights[r.key] = best.value;
       if (best.absPos != null) usedMatches.add(best.absPos);
     }
   });
@@ -995,7 +1044,8 @@ function parseBlockBased(text) {
   return {
     weights,
     detectedRanges: ranges.length,
-    parseMode: 'block-v4-owned'
+    parseMode: 'block-v5-crop',
+    rangesInOrder
   };
 }
 
@@ -1006,7 +1056,6 @@ function validateStructure(weights) {
   const total   = values.reduce((a, b) => a + Number(b), 0);
 
   const errors = [];
-
   if (total === 0) errors.push('Không đọc được đơn nào');
   if (nonZero > 8) errors.push('Quá nhiều dải có dữ liệu (>8)');
 
@@ -1154,8 +1203,8 @@ function getTypeLabel(r) {
        : 'Hoàn';
 }
 // =============================================================
-// OCR ENGINE v2.8 — PART 3/3
-// Pipeline · Routing · Modals · Batch · Exports
+// OCR ENGINE v3.0 — PART 3/3
+// Pipeline · Crop Refine · Modals · Batch · Exports
 // =============================================================
 
 // ==================== UNDO LOADER ====================
@@ -1194,7 +1243,8 @@ function parseFromText(rawText) {
     weights,
     actualTotal,
     detectedRanges: blockResult.detectedRanges,
-    parseMode:      blockResult.parseMode
+    parseMode:      blockResult.parseMode,
+    rangesInOrder:  blockResult.rangesInOrder || []
   };
 }
 
@@ -1221,6 +1271,59 @@ function scoreResult(parsed) {
     suspectKeys: dist.suspectKeys || []
   };
 }
+
+// ==================== v3.0: CROP REFINE ====================
+/**
+ * Refine kết quả OCR bằng cách crop từng card + OCR số riêng.
+ * Chỉ gọi khi checksum fail (OCR full misread số).
+ *
+ * @returns {Promise<Object|null>} weights mới nếu checksum OK, null nếu fail
+ */
+async function refineWithCrop(imageSource, parsed, signal) {
+  const rangesInOrder = parsed.rangesInOrder || [];
+
+  if (rangesInOrder.length === 0 || rangesInOrder.length > 8) {
+    console.warn('[OCR v3] Skip crop: ranges count =', rangesInOrder.length);
+    return null;
+  }
+
+  const img = await loadImage(imageSource);
+  const cards = computeCardRegions(img.height, rangesInOrder.length);
+
+  if (cards.length === 0) return null;
+
+  console.log(`[OCR v3] Crop ${cards.length} cards (ranges: ${rangesInOrder.map(r => r.key).join(', ')})`);
+
+  const refinedWeights = {
+    '0_2':0, '2_4':0, '4_6':0, '6_8':0,
+    '8_10':0, '10_12':0, '12_15':0, 'over_15':0
+  };
+
+  for (let i = 0; i < cards.length; i++) {
+    _checkAborted(signal);
+    const num = await ocrCardNumber(imageSource, cards[i], signal);
+    if (num === null) {
+      console.warn(`[OCR v3] Card ${i} (${rangesInOrder[i].key}) OCR failed`);
+      return null;
+    }
+    refinedWeights[rangesInOrder[i].key] = num;
+  }
+
+  const sum = Object.values(refinedWeights).reduce((a, b) => a + b, 0);
+  const expected = parsed.expectedTotal;
+
+  console.log(`[OCR v3] Crop sum: ${sum} / Expected: ${expected}`);
+
+  if (expected !== null && sum !== expected) {
+    console.warn('[OCR v3] Checksum vẫn fail sau crop → fallback v2.8');
+    return null;
+  }
+
+  console.log('[OCR v3] ✅ Crop refine OK');
+  return refinedWeights;
+}
+// ==================== /CROP REFINE ====================
+
 
 // ==================== BUILD FINAL RESULT ====================
 function buildFinalResult({
@@ -1292,9 +1395,7 @@ async function processOneFile(file, signal) {
   let bestScore  = -1;
   let attempts   = 0;
 
-  // ⭐ v2.8 FIX: Pass 1 = RAW (không preprocess)
-  // → Tesseract tự dùng adaptive threshold nội bộ
-  // → Tránh làm hỏng nét số 9/8/2 trên ảnh nền sáng
+  // Pass 1 = RAW (Tesseract tự xử), Pass 2 = Otsu, Pass 3 = Threshold
   const passes = [
     { name: 'P0-raw',        run: () => Promise.resolve(dataUrl) },
     { name: 'P2-otsu',       run: () => preprocessPass2(dataUrl, signal) },
@@ -1345,13 +1446,54 @@ async function processOneFile(file, signal) {
     };
   }
 
+  // ===== v3.0: CROP REFINE (chỉ khi checksum fail) =====
+  let finalParsed = bestBundle.parsed;
+  let finalScoreBundle = bestBundle.scoreBundle;
+
+  if (!finalScoreBundle.score.checksumOk) {
+    console.log('[OCR v3] Checksum fail → thử crop refine...');
+    try {
+      const statusDesc = document.getElementById('ocrStatusDesc');
+      if (statusDesc) statusDesc.innerText = 'Đang refine từng card...';
+
+      const refined = await refineWithCrop(dataUrl, finalParsed, signal);
+
+      if (refined) {
+        const newTotal = Object.values(refined).reduce((a, b) => a + b, 0);
+        const newScore = computeScore({
+          expectedTotal: finalParsed.expectedTotal,
+          actualTotal: newTotal,
+          detectedRanges: finalParsed.detectedRanges,
+          nonZeroRanges: Object.values(refined).filter(v => v > 0).length,
+          ocrConfidence: 92,
+          distributionWarnings: []
+        });
+
+        finalParsed = { ...finalParsed, weights: refined, actualTotal: newTotal };
+        finalScoreBundle = {
+          score: newScore,
+          structure: finalScoreBundle.structure,
+          dist: { warnings: [], suspectKeys: [] },
+          nonZero: Object.values(refined).filter(v => v > 0).length,
+          suspectKeys: []
+        };
+
+        console.log(`[OCR v3] ✅ Refined score: ${newScore.final}`);
+      }
+    } catch (e) {
+      if (e.message === 'OCR_CANCELLED') throw e;
+      console.warn('[OCR v3] Crop refine error:', e);
+    }
+  }
+  // ===== /CROP REFINE =====
+
   const result = buildFinalResult({
-    parsed:          bestBundle.parsed,
+    parsed:          finalParsed,
     rawText:         bestBundle.rawText,
     detectedColorType,
     tabConfidence,
     tabMethod,
-    scoreBundle:     bestBundle.scoreBundle,
+    scoreBundle:     finalScoreBundle,
     attempts,
     blobUrl
   });
@@ -1476,16 +1618,10 @@ function showTabPickerModal() {
         cursor: pointer;
         transition: all 0.15s;
       }
-      .tab-picker-btn:hover {
-        border-color: var(--accent);
-        background: var(--accent-soft);
-      }
+      .tab-picker-btn:hover { border-color: var(--accent); background: var(--accent-soft); }
       .tab-picker-btn:active { transform: scale(0.98); }
       .tab-picker-btn.skip { color: var(--danger); }
-      .tab-picker-btn.skip:hover {
-        background: var(--danger-bg);
-        border-color: var(--danger-bd);
-      }
+      .tab-picker-btn.skip:hover { background: var(--danger-bg); border-color: var(--danger-bd); }
     `;
     document.head.appendChild(style);
 
@@ -1542,17 +1678,9 @@ function showReviewModal(item) {
         border: 1px solid;
         transition: all 0.15s;
       }
-      .review-btn-edit {
-        background: var(--surface);
-        border-color: var(--border);
-        color: var(--text-1);
-      }
+      .review-btn-edit { background: var(--surface); border-color: var(--border); color: var(--text-1); }
       .review-btn-edit:hover { border-color: var(--accent); color: var(--accent); }
-      .review-btn-save {
-        background: var(--accent);
-        border-color: var(--accent);
-        color: #fff;
-      }
+      .review-btn-save { background: var(--accent); border-color: var(--accent); color: #fff; }
       .review-btn-save:hover { filter: brightness(0.95); }
       .review-btn:active { transform: scale(0.97); }
     `;
@@ -1650,8 +1778,6 @@ function ensureCancelButton() {
     backdrop-filter: blur(4px);
     transition: all 0.15s;
   `;
-  btn.onmouseenter = () => { btn.style.background = 'rgba(255,255,255,0.18)'; };
-  btn.onmouseleave = () => { btn.style.background = 'rgba(255,255,255,0.1)'; };
   btn.onclick = () => cancelOcr();
   overlay.appendChild(btn);
 }
@@ -1712,10 +1838,7 @@ async function _runOcrFromFiles(files, wasAppend = false) {
       if (item.error) { needAttention.push(item); continue; }
       const r = item.result;
 
-      if (!r.detectedColorType) {
-        needTab.push(item);
-        continue;
-      }
+      if (!r.detectedColorType) { needTab.push(item); continue; }
 
       if (findExactDuplicate(r)) {
         duplicates.push({ item, kind: 'exact' });
@@ -1729,11 +1852,8 @@ async function _runOcrFromFiles(files, wasAppend = false) {
       }
 
       if (r.score.final >= SCORE_AUTO_SAVE) {
-        if (await tryAutoSave(r)) {
-          autoSaved.push(item);
-        } else {
-          needAttention.push(item);
-        }
+        if (await tryAutoSave(r)) autoSaved.push(item);
+        else needAttention.push(item);
       } else {
         needAttention.push(item);
       }
