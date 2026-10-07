@@ -1,5 +1,5 @@
 // =============================================================
-// OCR ENGINE v3.0 — PART 1/3
+// OCR ENGINE v3.1 — PART 1/3
 // Config · AbortController · Worker · Cache
 // =============================================================
 
@@ -399,7 +399,7 @@ export function getOcrCacheStats() {
   };
 }
 // =============================================================
-// OCR ENGINE v3.0 — PART 2/3
+// OCR ENGINE v3.1 — PART 2/3
 // Image · Tab Detect · Card Crop · Preprocess · Parser · Validation · Scoring
 // =============================================================
 
@@ -844,10 +844,8 @@ function normalizeOcrText(text) {
 
     .replace(/(Ì|Í|I|l|\|)(\s*)(?=Đơn\s*hàng)/gi, '1$2')
 
-    // Tách số dính "Đơnh": "2Đơnh8.001" → "2 Đơn hàng 8.001"
     .replace(/(\d+)\s*[đĐ][ơơọo]nh(?=\d)/gi, '$1 Đơn hàng ')
 
-    // TẦNG 1 — Fix 8 case chữ cái → số trước "Đơn hàng"
     .replace(/([Zz])(\s*)(?=Đơn\s*hàng)/g, '2$2')
     .replace(/([Ss])(\s*)(?=Đơn\s*hàng)/g, '5$2')
     .replace(/([OoQ])(\s*)(?=Đơn\s*hàng)/g, '0$2')
@@ -857,7 +855,6 @@ function normalizeOcrText(text) {
     .replace(/([AH])(\s*)(?=Đơn\s*hàng)/g, '4$2')
     .replace(/([T])(\s*)(?=Đơn\s*hàng)/g, '7$2')
 
-    // Biến thể "Đgï", "Đgì"
     .replace(/[đĐ]g[ïi]n?h?/gi, 'Đơn hàng')
     .replace(/[đĐ][ơơọo]g[ïi]/gi, 'Đơn hàng')
 
@@ -982,7 +979,6 @@ function parseBlockBased(text) {
     });
   }
 
-  // v3.0: Track ranges in order (chỉ valid keys)
   const rangesInOrder = ranges
     .filter(r => r.key !== null)
     .map(r => ({ key: r.key, minStr: r.minStr, maxStr: r.maxStr }));
@@ -1038,10 +1034,46 @@ function parseBlockBased(text) {
     }
   });
 
+  // ⭐ v3.1: Ordered fallback — match ranges[i] với allOrderMatches[i]
+  const allOrderMatches = [];
+  const allRe = /(\d{1,6})\s*Đơn\s*hàng/gi;
+  let am;
+  while ((am = allRe.exec(text)) !== null) {
+    const absPos = am.index;
+    if (isInsideTotal(absPos)) continue;
+    const v = parseInt(am[1], 10);
+    if (!Number.isFinite(v) || v < 0) continue;
+    allOrderMatches.push({ value: v, pos: absPos });
+  }
+
+  const orderedWeights = {
+    '0_2': 0, '2_4': 0, '4_6': 0, '6_8': 0,
+    '8_10': 0, '10_12': 0, '12_15': 0, 'over_15': 0
+  };
+  for (let i = 0; i < ranges.length && i < allOrderMatches.length; i++) {
+    if (ranges[i].key) orderedWeights[ranges[i].key] = allOrderMatches[i].value;
+  }
+
+  const expectedTotal = extractTotal(text);
+  const lineSum = Object.values(weights).reduce((a, b) => a + b, 0);
+  const orderedSum = Object.values(orderedWeights).reduce((a, b) => a + b, 0);
+
+  let finalWeights = weights;
+  let finalMode = 'block-v5-crop';
+
+  if (expectedTotal !== null) {
+    const lineDiff = Math.abs(lineSum - expectedTotal);
+    const orderedDiff = Math.abs(orderedSum - expectedTotal);
+    if (orderedDiff < lineDiff) {
+      finalWeights = orderedWeights;
+      finalMode = 'block-v6-ordered';
+    }
+  }
+
   return {
-    weights,
+    weights: finalWeights,
     detectedRanges: ranges.length,
-    parseMode: 'block-v5-crop',
+    parseMode: finalMode,
     rangesInOrder
   };
 }
@@ -1200,7 +1232,7 @@ function getTypeLabel(r) {
        : 'Hoàn';
 }
 // =============================================================
-// OCR ENGINE v3.0 — PART 3/3
+// OCR ENGINE v3.1 — PART 3/3
 // Pipeline · Crop Refine · Modals · Batch · Exports
 // =============================================================
 
@@ -1374,7 +1406,7 @@ function buildFinalResult({
   };
 }
 
-// ==================== PROCESS ONE FILE ====================
+// ==================== PROCESS ONE FILE (v3.1 — Pass 1 = Otsu) ====================
 async function processOneFile(file, signal) {
   _checkAborted(signal);
 
@@ -1407,9 +1439,10 @@ async function processOneFile(file, signal) {
   let bestScore  = -1;
   let attempts   = 0;
 
+  // ⭐ v3.1: Pass 1 = Otsu (giống v1) — fallback raw + threshold
   const passes = [
-    { name: 'P0-raw',        run: () => Promise.resolve(dataUrl) },
-    { name: 'P2-otsu',       run: () => preprocessPass2(dataUrl, signal) },
+    { name: 'P0-otsu',       run: () => preprocessPass2(dataUrl, signal) },
+    { name: 'P1-raw',        run: () => Promise.resolve(dataUrl) },
     { name: 'P3-threshold',  run: () => preprocessPass3(dataUrl, 130, signal) }
   ];
 
