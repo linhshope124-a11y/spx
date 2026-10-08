@@ -35,7 +35,7 @@ function showSummaryToast(autoSaved, duplicates, needAttention, delay = 0) {
 }
 
 // ==================== CONFIG ====================
-const DISABLE_AUTO_SAVE = true;
+const DISABLE_AUTO_SAVE = false;
 
 const OCR_TIMEOUT_MS    = 60000;
 const OCR_CACHE_VERSION = 'v1b-3';
