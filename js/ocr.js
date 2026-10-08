@@ -10,6 +10,30 @@ import { openAddModal, openEditModal, switchModalSubTab, showToast } from './ui.
 import { updateAllViews } from './render.js';
 import { showConfirm } from './dialog.js';
 
+// ==================== SUMMARY TOAST (v50.11.13) ====================
+/**
+ * Hiện toast tổng kết sau khi quét nhiều ảnh.
+ * @param {number} autoSaved     - số ảnh tự động lưu
+ * @param {number} duplicates    - số ảnh trùng
+ * @param {number} needAttention - số ảnh cần check
+ * @param {number} delay         - delay (ms) trước khi hiện
+ */
+function showSummaryToast(autoSaved, duplicates, needAttention, delay = 0) {
+  if (autoSaved === 0 && duplicates === 0 && needAttention === 0) return;
+
+  const parts = [];
+  if (autoSaved > 0)     parts.push(`✅ Đã lưu ${autoSaved}`);
+  if (duplicates > 0)    parts.push(`⚡ Trùng ${duplicates}`);
+  if (needAttention > 0) parts.push(`⚠️ Cần check ${needAttention}`);
+
+  const msg = parts.join(' · ');
+  const type = needAttention > 0 ? 'warning'
+             : autoSaved > 0     ? 'success'
+             : 'warning';
+
+  setTimeout(() => showToast(msg, type, 3200), delay);
+}
+
 // ==================== CONFIG ====================
 const DISABLE_AUTO_SAVE = true;
 
